@@ -106,6 +106,7 @@ def test_home_to_library_to_preview(tmp_path, monkeypatch, chrome_binary, viewpo
     browse = tmp_path / 'browse'
     (browse / 'Subfolder').mkdir(parents=True)
     (browse / 'Subfolder' / 'inner.txt').write_bytes(b'inner')
+    (browse / 'Alpha.txt').write_bytes(b'alpha')
     home = str(Path.home())
 
     def fake_pick(kind='directory', initial=''):

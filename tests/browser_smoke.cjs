@@ -559,6 +559,1130 @@ async function main() {
     await waitFor(()=>[...document.querySelectorAll('.game-files-rows .game-files-new')].some(row=>row.textContent.includes('Imported demo.sfc')),'copied file highlighted');
     assert.ok(fs.existsSync(path.join(browsePath,'Imported demo.sfc')),'picked file copied into browsed folder');
     assert.equal(await evaluate(()=>document.querySelectorAll('.game-files-row-menu').length),1);
+    // GF-01: the name header toggles direction without a new directory request; folders stay first.
+    assert.deepEqual(await evaluate(()=>[...document.querySelectorAll('.game-files-rows .btn')].map(row=>row.textContent)),['Subfolder','Alpha.txt','Imported demo.sfc']);
+    await click('.game-files-sort');
+    await waitFor(()=>document.querySelector('.game-files-sort').getAttribute('aria-label').includes('descending'),'sort direction toggled');
+    assert.deepEqual(await evaluate(()=>[...document.querySelectorAll('.game-files-rows .btn')].map(row=>row.textContent)),['Subfolder','Imported demo.sfc','Alpha.txt']);
+    await click('.game-files-sort');
+    await waitFor(()=>document.querySelector('.game-files-sort').getAttribute('aria-label').includes('ascending'),'sort restored');
+    // GF-02: checkboxes append to the selection, the count shows, Escape clears.
+    await evaluate(()=>{const boxes=[...document.querySelectorAll('.game-files-check')];boxes[1].click();boxes[2].click();});
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-selection').textContent),'2 selected');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-toolbar button[aria-label="Rename"]').disabled),true);
+    await evaluate(()=>document.querySelector('.game-files-pane').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})));
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-selection').textContent),'');
+    // GF-03: one confirmation deletes the whole selection.
+    await evaluate(()=>{const boxes=[...document.querySelectorAll('.game-files-check')];boxes[1].click();boxes[2].click();});
+    await click('.game-files-toolbar button[aria-label="Delete file"]');
+    await waitFor(()=>document.querySelector('.game-file-delete-dialog')?.textContent.includes('Alpha.txt'),'batch delete lists every item');
+    await click('.game-file-delete-dialog .btn:not(.btn-muted)');
+    await waitFor(()=>[...document.querySelectorAll('.game-files-rows .btn')].map(row=>row.textContent).join()==='Subfolder','batch deleted both files');
+    assert.equal(fs.existsSync(path.join(browsePath,'Alpha.txt')),false);
+    assert.equal(fs.existsSync(path.join(browsePath,'Imported demo.sfc')),false);
+    // A browser-mode drop without native paths asks for the picker instead of writing.
+    await evaluate(()=>{const t=document.querySelector('.game-files-table');
+        t.dispatchEvent(new Event('dragover',{bubbles:true}));
+        const drop=new Event('drop',{bubbles:true});
+        Object.defineProperty(drop,'dataTransfer',{value:{files:[{name:'x.sfc'}]}});
+        t.dispatchEvent(drop);});
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('Add games'),'drop without paths asks for picker');
+    // GF-05-R2: a native callback only consumes the drop zone of its own event.
+    await evaluate(dir=>{
+        const t=document.querySelector('.game-files-table');
+        const fire=stamp=>{t.dispatchEvent(new Event('dragover',{bubbles:true}));
+            const drop=new Event('drop',{bubbles:true});
+            Object.defineProperty(drop,'timeStamp',{value:stamp});
+            Object.defineProperty(drop,'dataTransfer',{value:{files:[{name:'y.sfc'}]}});
+            t.dispatchEvent(drop);};
+        fire(111); fire(222);
+        window.__stamps={a:111,b:222}; window.__dropDir=dir;},browsePath);
+    // A stale callback must not consume the newer zone nor trigger a preview.
+    await evaluate(()=>gameFilesExternalDrop(['/nope-a'],__stamps.a));
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-table').classList.contains('game-files-drop')),true,'stale callback leaves the newer zone');
+    assert.equal(await evaluate(()=>Boolean(document.querySelector('.game-file-import-dialog'))),false,'stale callback opens no preview');
+    // The second drop's own callback consumes its zone and previews its source.
+    await evaluate(()=>gameFilesExternalDrop([__dropDir+'/Subfolder'],__stamps.b));
+    await waitFor(()=>Boolean(document.querySelector('.game-file-import-dialog')),'fresh callback opens exactly one preview');
+    await evaluate(()=>document.querySelector('.game-file-import-dialog .btn-muted')?.click());
+    await waitFor(()=>!document.querySelector('.game-file-import-dialog'),'import dialog closed');
+    // GF-03-R2(3): a partial copy exposes every written path, not just four.
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-check')][0].click();});
+    await click('.game-files-toolbar button[aria-label="Copy"]');
+    await evaluate(()=>{
+        window.__origRunGameJob = window.runGameJob;
+        const written=[1,2,3,4,5].map(i=>'mtp://dev/Target/Pack/m'+i+'.sfc');
+        window.__partial={items:[{status:'partial',path:'mtp://dev/Roms/Pack',name:'Pack',
+            target:'mtp://dev/Target/Pack',written,error:'传输中断'}],cancelled:false};
+        window.runGameJob=(route,payload,onProgress)=>Promise.resolve({id:'x',result:window.__partial});
+    });
+    await click('.game-files-toolbar button[aria-label="Paste"]');
+    await waitFor(()=>!document.querySelector('.game-files-detail')?.hidden,'written detail box shown');
+    await evaluate(()=>document.querySelector('.game-files-detail').open=true);
+    assert.equal(await evaluate(()=>document.querySelectorAll('.game-files-detail li').length),5,'all five written paths listed');
+    assert.equal(await evaluate(()=>[...document.querySelectorAll('.game-files-detail li')].map(li=>li.textContent).join().includes('m5.sfc')),true,'fifth path reachable');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail').textContent.includes('Target/Pack')),true,'detail names the real target');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail').textContent.includes('传输中断')),true,'detail names the interruption');
+    // The cancelled variant keeps the detail and marks the summary cancelled.
+    await evaluate(()=>{
+        const error=Object.assign(new Error('cancelled'),{cancelled:true,
+            result:{items:[{status:'partial',path:'mtp://dev/Roms/Pack',name:'Pack',
+                target:'mtp://dev/Target/Pack',
+                written:['mtp://dev/Target/Pack/m1.sfc','mtp://dev/Target/Pack/m2.sfc'],error:'已取消'}],cancelled:true}});
+        window.runGameJob=()=>Promise.reject(error);
+    });
+    await click('.game-files-toolbar button[aria-label="Paste"]');
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('已取消'),'cancelled summary shown');
+    assert.equal(await evaluate(()=>document.querySelectorAll('.game-files-detail li').length),2,'cancelled detail lists only confirmed writes');
+    // Closure A: an add failure exposes the written range and the kept member.
+    await evaluate(()=>{
+        window.runGameJob=()=>Promise.resolve({id:'x',result:{copied:[],replaced:[],skipped:[],kept:[],
+            failed:[{name:'Subfolder',target:browseDir()+'/Subfolder',conflict:'Subfolder/z.bin',
+                written:['/browse/Subfolder/a.bin'],error:'同名成员冲突'}],remaining:[],leftovers:[]}});
+        function browseDir(){return window.__dropDir;}
+    });
+    await evaluate(dir=>{const t=document.querySelector('.game-files-table');
+        t.dispatchEvent(new Event('dragover',{bubbles:true}));
+        const drop=new Event('drop',{bubbles:true});
+        Object.defineProperty(drop,'timeStamp',{value:333});
+        Object.defineProperty(drop,'dataTransfer',{value:{files:[{name:'Subfolder'}]}});
+        t.dispatchEvent(drop);
+        gameFilesExternalDrop([dir+'/Subfolder'],333);},browsePath);
+    await waitFor(()=>Boolean(document.querySelector('.game-file-import-dialog')),'add-failure preview opened');
+    await evaluate(()=>[...document.querySelectorAll('.game-file-import-dialog .desktop-confirm-actions .btn')].pop().click());
+    await waitFor(()=>!document.querySelector('.game-files-detail')?.hidden,'add failure detail shown');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail').textContent.includes('Subfolder/z.bin')),true,'kept member named in detail');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail li')?.textContent.includes('/browse/Subfolder/a.bin')),true,'written path listed for add failure');
+    await evaluate(()=>{window.runGameJob=window.__origRunGameJob;});
+    // GF-05-FINAL: a nonce-bound source only feeds the drop carrying that nonce.
+    // A foreign push arrived moments earlier is never borrowed.
+    await evaluate(dir=>{
+        gameFilesDropSource({nonce:'foreign-nonce',paths:['/evil/Foreign.sfc']});
+        const t=document.querySelector('.game-files-table');
+        t.dispatchEvent(new Event('dragover',{bubbles:true}));
+        const drop=new Event('drop',{bubbles:true});
+        Object.defineProperty(drop,'timeStamp',{value:444});
+        Object.defineProperty(drop,'dataTransfer',{value:{
+            files:[{name:'Subfolder'}],
+            getData:type=>type==='org.plcn.dropid'?'own-nonce':'',
+            types:['Files','org.plcn.dropid']}});
+        t.dispatchEvent(drop);
+        window.__dropDir=dir;
+        gameFilesDropSource({nonce:'own-nonce',paths:[dir+'/Subfolder']});},browsePath);
+    await waitFor(()=>Boolean(document.querySelector('.game-file-import-dialog')),'nonce-bound source opens its own preview');
+    assert.equal(await evaluate(()=>document.querySelector('.game-file-import-dialog').textContent.includes('Subfolder')),true,'preview is for this drop’s source, not the foreign record');
+    await evaluate(()=>document.querySelector('.game-file-import-dialog .btn-muted')?.click());
+    await waitFor(()=>!document.querySelector('.game-file-import-dialog'),'nonce preview closed');
+    // Source-first order: a pushed source waits for its own drop to arrive.
+    await evaluate(dir=>{
+        gameFilesDropSource({nonce:'early-nonce',paths:[dir+'/Subfolder']});
+        const t=document.querySelector('.game-files-table');
+        t.dispatchEvent(new Event('dragover',{bubbles:true}));
+        const drop=new Event('drop',{bubbles:true});
+        Object.defineProperty(drop,'timeStamp',{value:555});
+        Object.defineProperty(drop,'dataTransfer',{value:{
+            files:[{name:'Subfolder'}],
+            getData:()=>'',
+            types:['Files','org.plcn.dropid.early-nonce']}});
+        t.dispatchEvent(drop);},browsePath);
+    await waitFor(()=>Boolean(document.querySelector('.game-file-import-dialog')),'types-list nonce also binds the source');
+    await evaluate(()=>document.querySelector('.game-file-import-dialog .btn-muted')?.click());
+    await waitFor(()=>!document.querySelector('.game-file-import-dialog'),'types-list nonce preview closed');
+    // C-03: drop A lands, drop B lands (overwriting the zone), then sources
+    // arrive in reverse — each must still feed its own drop exactly once.
+    await evaluate(dir=>{
+        const t=document.querySelector('.game-files-table');
+        const fire=(nonce,stamp)=>{t.dispatchEvent(new Event('dragover',{bubbles:true}));
+            const drop=new Event('drop',{bubbles:true});
+            Object.defineProperty(drop,'timeStamp',{value:stamp});
+            Object.defineProperty(drop,'dataTransfer',{value:{
+                files:[{name:'Subfolder'}],
+                getData:type=>type==='org.plcn.dropid'?nonce:'',
+                types:['Files']}});
+            t.dispatchEvent(drop);};
+        fire('nonce-a',661); fire('nonce-b',662);
+        window.__dropDir=dir;
+        gameFilesDropSource({nonce:'nonce-b',paths:[dir+'/Subfolder']});},browsePath);
+    await waitFor(()=>Boolean(document.querySelector('.game-file-import-dialog')),'reversed first callback opens its own preview');
+    await evaluate(()=>document.querySelector('.game-file-import-dialog .btn-muted')?.click());
+    await waitFor(()=>!document.querySelector('.game-file-import-dialog'),'first reversed preview closed');
+    await evaluate(dir=>gameFilesDropSource({nonce:'nonce-a',paths:[dir+'/Subfolder']}),browsePath);
+    await waitFor(()=>Boolean(document.querySelector('.game-file-import-dialog')),'earlier drop’s pending zone still consumes its own source');
+    await evaluate(()=>document.querySelector('.game-file-import-dialog .btn-muted')?.click());
+    await waitFor(()=>!document.querySelector('.game-file-import-dialog'),'second reversed preview closed');
+    // A repeat callback for the consumed nonce opens no further preview.
+    await evaluate(dir=>gameFilesDropSource({nonce:'nonce-a',paths:[dir+'/Subfolder']}),browsePath);
+    await new Promise(resolve=>setTimeout(resolve,150));
+    assert.equal(await evaluate(()=>Boolean(document.querySelector('.game-file-import-dialog'))),false,'consumed nonce opens no extra preview');
+    // C-03(2): two nonce-bound batches in flight at once each write exactly
+    // once — the second waits for the first write to finish instead of being
+    // silently swallowed by the busy flag.
+    const ext = fs.mkdtempSync(path.join('/tmp','drop-ext-'));
+    fs.writeFileSync(path.join(ext,'BatchA.txt'),'aaa');
+    fs.writeFileSync(path.join(ext,'BatchB.txt'),'bbb');
+    await evaluate(()=>{
+        window.__calls=[];
+        window.runGameJob=(route,payload)=>{
+            const entry={payload,finished:false,startedAfter:window.__calls.filter(c=>c.finished).length};
+            window.__calls.push(entry);
+            return new Promise(resolve=>setTimeout(()=>{
+                entry.finished=true;
+                resolve({id:'x',result:{copied:[payload.sources[0].split('/').pop()],replaced:[],skipped:[],
+                    failed:[],remaining:[],kept:[],leftovers:[],written:[]}});
+            },300));
+        };});
+    await evaluate((ext,dir)=>{
+        const t=document.querySelector('.game-files-table');
+        const fire=(nonce,stamp)=>{t.dispatchEvent(new Event('dragover',{bubbles:true}));
+            const drop=new Event('drop',{bubbles:true});
+            Object.defineProperty(drop,'timeStamp',{value:stamp});
+            Object.defineProperty(drop,'dataTransfer',{value:{
+                files:[{name:'x'}], getData:type=>type==='org.plcn.dropid'?nonce:'', types:['Files']}});
+            t.dispatchEvent(drop);};
+        fire('nb-a',771); fire('nb-b',772);
+        gameFilesDropSource({nonce:'nb-a',paths:[ext+'/BatchA.txt']});
+        window.__fireB=()=>gameFilesDropSource({nonce:'nb-b',paths:[ext+'/BatchB.txt']});},ext,browsePath);
+    // C-03a: the second batch's source arrives while the first write is still
+    // in flight — it queues instead of being rejected as expired.
+    await waitFor(()=>window.__calls?.length===1 && !window.__calls[0].finished,'first batch write in flight');
+    await evaluate(()=>window.__fireB());
+    await waitFor(()=>window.__calls?.length===2,'both batches submitted exactly once');
+    const order = await evaluate(()=>window.__calls.map(c=>({
+        source:c.payload.sources[0].split('/').pop(),directory:c.payload.directory,after:c.startedAfter})));
+    assert.equal(order[0].source,'BatchA.txt','first batch writes its own source');
+    assert.equal(order[1].source,'BatchB.txt','second batch writes its own source');
+    assert.equal(order.every(c=>c.directory===browsePath),true,'both land on their own target');
+    assert.equal(order[1].after,1,'second write only starts after the first finished');
+    await waitFor(()=>window.__calls?.[1]?.finished===true,'second batch write completed');
+    await evaluate(()=>{window.runGameJob=window.__origRunGameJob;});
+    // C-03b: sibling-directory drops — the refresh after writing A must not
+    // expire B queued beside it.
+    fs.mkdirSync(path.join(browsePath,'SubA'),{recursive:true});
+    fs.mkdirSync(path.join(browsePath,'SubB'),{recursive:true});
+    await evaluate(()=>gameFilesView.refresh());
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/SubA')),'sibling rows visible');
+    await evaluate((ext,dir)=>{
+        window.__calls=[];
+        window.runGameJob=(route,payload)=>{
+            const entry={payload,finished:false};
+            window.__calls.push(entry);
+            return new Promise(resolve=>setTimeout(()=>{entry.finished=true;
+                resolve({id:'x',result:{copied:['x'],replaced:[],skipped:[],failed:[],remaining:[],kept:[],leftovers:[],written:[]}});},150));};
+        const rowOf=name=>[...document.querySelectorAll('.game-files-row')]
+            .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/'+name));
+        const fire=(nonce,stamp,name)=>{const row=rowOf(name);
+            row.dispatchEvent(new Event('dragover',{bubbles:true}));
+            const drop=new Event('drop',{bubbles:true});
+            Object.defineProperty(drop,'timeStamp',{value:stamp});
+            Object.defineProperty(drop,'dataTransfer',{value:{
+                files:[{name:'x'}], getData:t=>t==='org.plcn.dropid'?nonce:'', types:['Files']}});
+            row.dispatchEvent(drop);};
+        fire('sib-a',881,'SubA'); fire('sib-b',882,'SubB');
+        gameFilesDropSource({nonce:'sib-b',paths:[ext+'/BatchB.txt']});
+        gameFilesDropSource({nonce:'sib-a',paths:[ext+'/BatchA.txt']});},ext,browsePath);
+    await waitFor(()=>window.__calls?.length===2 && window.__calls.every(c=>c.finished),'sibling batches each wrote once');
+    const sibs = await evaluate(()=>window.__calls.map(c=>c.payload.directory));
+    assert.equal(sibs[0].endsWith('/SubB'),true,'reversed first batch wrote into SubB');
+    assert.equal(sibs[1].endsWith('/SubA'),true,'queued sibling wrote into SubA');
+    // C-03c: a preview delayed past a user navigation writes nothing for the
+    // old directory and keeps the current view.
+    await evaluate(()=>{
+        window.__origDR=window.desktopRequest;
+        window.desktopRequest=(route,payload)=>route==='/api/game-files/import-preview'
+            ? new Promise(r=>setTimeout(()=>window.__origDR(route,payload).then(r),900))
+            : window.__origDR(route,payload);
+        window.__calls=[];
+        window.runGameJob=(route,payload)=>{window.__calls.push(payload);
+            return Promise.resolve({id:'x',result:{copied:['x'],replaced:[],skipped:[],failed:[],remaining:[],kept:[],leftovers:[],written:[]}});};});
+    await evaluate((ext)=>{
+        const t=document.querySelector('.game-files-table');
+        t.dispatchEvent(new Event('dragover',{bubbles:true}));
+        const drop=new Event('drop',{bubbles:true});
+        Object.defineProperty(drop,'timeStamp',{value:991});
+        Object.defineProperty(drop,'dataTransfer',{value:{
+            files:[{name:'x'}], getData:tt=>tt==='org.plcn.dropid'?'nav-n':'', types:['Files']}});
+        t.dispatchEvent(drop);
+        gameFilesDropSource({nonce:'nav-n',paths:[ext+'/BatchA.txt']});},ext);
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('Checking'),'stale preview in flight');
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/SubA'))?.querySelector('.btn')?.click();});
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.match(/expired|失效/),'stale batch reported expired');
+    assert.equal(await evaluate(()=>window.__calls.length),0,'no write after navigation');
+    await evaluate(()=>{window.desktopRequest=window.__origDR; window.runGameJob=window.__origRunGameJob;});
+    // Return to the parent folder for the interleaving scenarios.
+    await evaluate(name=>{[...document.querySelectorAll('.game-files-location .btn')].find(b=>b.textContent===name)?.click();},path.basename(browsePath));
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/SubA')),'back at parent folder');
+    // C-03e: a matched batch keeps its queue slot while a manual paste owns
+    // the workbench mutex — after the paste releases it, the batch submits
+    // once to its original landing and shows a result.
+    fs.writeFileSync(path.join(ext,'Clash.sfc'),'drop-source');
+    await evaluate(ext=>{
+        window.__calls=[];
+        const real=window.desktopRequest;
+        window.__realDR2=real;
+        window.__previewHeld=false;
+        window.desktopRequest=(route,payload)=>route==='/api/game-files/import-preview'&&!window.__previewHeld
+            ? (window.__previewHeld=true,new Promise(r=>{window.__previewReady=()=>r(real(route,payload));}))
+            : real(route,payload);
+        window.runGameJob=(route,payload)=>{
+            if(payload.action==='copy')
+                return new Promise(r=>{window.__pasteDone=()=>r({id:'p',result:{
+                    items:[{name:payload.paths[0].split('/').pop(),status:'copied',path:'x',written:[]}]}});});
+            const entry={payload,finished:false};
+            window.__calls.push(entry);
+            return new Promise(r=>setTimeout(()=>{entry.finished=true;r({id:'x',result:{copied:['x'],replaced:[],
+                skipped:[],failed:[],remaining:[],kept:[],leftovers:[],written:[]}});},80));
+        };
+        const t=document.querySelector('.game-files-table');
+        t.dispatchEvent(new Event('dragover',{bubbles:true}));
+        const drop=new Event('drop',{bubbles:true});
+        Object.defineProperty(drop,'timeStamp',{value:1101});
+        Object.defineProperty(drop,'dataTransfer',{value:{
+            files:[{name:'x'}],getData:tt=>tt==='org.plcn.dropid'?'busy-n':'',types:['Files']}});
+        t.dispatchEvent(drop);
+        gameFilesDropSource({nonce:'busy-n',paths:[ext+'/BatchB.txt']});
+        gameFilesClipboard={root:document.getElementById('retroarch_root').value,
+            items:[{path:ext+'/BatchA.txt',name:'BatchA.txt',folder:false}]};
+    },ext);
+    await waitFor(()=>Boolean(window.__previewReady),'import preview in flight');
+    await evaluate(()=>document.querySelector('.game-files-toolbar button[aria-label="Paste"]:not([disabled])')?.click());
+    await waitFor(()=>Boolean(window.__pasteDone),'manual paste running');
+    await evaluate(()=>window.__previewReady());   // preview lands while the paste holds the mutex
+    await new Promise(resolve=>setTimeout(resolve,250));
+    assert.equal(await evaluate(()=>window.__calls.length),0,'batch issues no write while the paste is busy');
+    await evaluate(()=>window.__pasteDone());
+    await waitFor(()=>window.__calls?.length===1 && window.__calls[0].finished,'queued batch writes after the paste releases the mutex');
+    assert.equal(await evaluate(()=>window.__calls[0].payload.action),'add','batch submission is an import write');
+    assert.equal(await evaluate(()=>window.__calls[0].payload.directory),browsePath,'batch wrote to its original landing');
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.match(/Copied|已复制/),'batch shows an explicit result');
+    // C-03e conflict: if the waiting paste created the same name in the
+    // landing, the resumed batch re-checks conflicts and asks again.
+    await evaluate(ext=>{
+        window.__calls=[];
+        window.__previewHeld=false;
+        window.desktopRequest=(route,payload)=>route==='/api/game-files/import-preview'&&!window.__previewHeld
+            ? (window.__previewHeld=true,new Promise(r=>{window.__previewReady=()=>r(window.__realDR2(route,payload));}))
+            : window.__realDR2(route,payload);
+        window.runGameJob=(route,payload)=>{
+            if(payload.action==='copy')
+                return new Promise(r=>{window.__pasteDone=()=>r({id:'p',result:{
+                    items:[{name:'Clash.sfc',status:'copied',path:'x',written:[]}]}});});
+            const entry={payload,finished:false};
+            window.__calls.push(entry);
+            return new Promise(r=>setTimeout(()=>{entry.finished=true;r({id:'x',result:{copied:['x'],replaced:[],
+                skipped:[],failed:[],remaining:[],kept:[],leftovers:[],written:[]}});},80));
+        };
+        const t=document.querySelector('.game-files-table');
+        t.dispatchEvent(new Event('dragover',{bubbles:true}));
+        const drop=new Event('drop',{bubbles:true});
+        Object.defineProperty(drop,'timeStamp',{value:1102});
+        Object.defineProperty(drop,'dataTransfer',{value:{
+            files:[{name:'x'}],getData:tt=>tt==='org.plcn.dropid'?'clash-n':'',types:['Files']}});
+        t.dispatchEvent(drop);
+        gameFilesDropSource({nonce:'clash-n',paths:[ext+'/Clash.sfc']});
+        gameFilesClipboard={root:document.getElementById('retroarch_root').value,
+            items:[{path:ext+'/Clash.sfc',name:'Clash.sfc',folder:false}]};
+    },ext);
+    await waitFor(()=>Boolean(window.__previewReady),'second preview in flight');
+    await evaluate(()=>document.querySelector('.game-files-toolbar button[aria-label="Paste"]:not([disabled])')?.click());
+    await waitFor(()=>Boolean(window.__pasteDone),'second paste running');
+    await evaluate(()=>window.__previewReady());
+    await new Promise(resolve=>setTimeout(resolve,250));
+    fs.writeFileSync(path.join(browsePath,'Clash.sfc'),'pasted-original-bytes');
+    await evaluate(()=>window.__pasteDone());
+    await waitFor(()=>Boolean(document.querySelector('.game-file-import-dialog')),
+        'resumed batch re-checks conflicts against the pasted file');
+    await evaluate(()=>document.querySelector('.game-file-import-dialog .btn-muted')?.click());
+    await waitFor(()=>!document.querySelector('.game-file-import-dialog'),'conflict dialog closed');
+    assert.equal(await evaluate(()=>window.__calls.filter(c=>c.payload.action==='add').length),0,'cancelled batch issues no write');
+    assert.equal(fs.readFileSync(path.join(browsePath,'Clash.sfc'),'utf8'),'pasted-original-bytes','pasted bytes kept');
+    fs.unlinkSync(path.join(browsePath,'Clash.sfc'));
+    // C-03e expiry: navigation during the wait ends the batch explicitly.
+    await evaluate(ext=>{
+        window.__calls=[];
+        window.__previewHeld=false;
+        window.desktopRequest=(route,payload)=>route==='/api/game-files/import-preview'&&!window.__previewHeld
+            ? (window.__previewHeld=true,new Promise(r=>{window.__previewReady=()=>r(window.__realDR2(route,payload));}))
+            : window.__realDR2(route,payload);
+        window.runGameJob=(route,payload)=>{
+            if(payload.action==='copy')
+                return new Promise(r=>{window.__pasteDone=()=>r({id:'p',result:{
+                    items:[{name:'x',status:'copied',path:'x',written:[]}]}});});
+            const entry={payload,finished:false};
+            window.__calls.push(entry);
+            return new Promise(r=>setTimeout(()=>{entry.finished=true;r({id:'x',result:{copied:['x'],replaced:[],
+                skipped:[],failed:[],remaining:[],kept:[],leftovers:[],written:[]}});},80));
+        };
+        const t=document.querySelector('.game-files-table');
+        t.dispatchEvent(new Event('dragover',{bubbles:true}));
+        const drop=new Event('drop',{bubbles:true});
+        Object.defineProperty(drop,'timeStamp',{value:1103});
+        Object.defineProperty(drop,'dataTransfer',{value:{
+            files:[{name:'x'}],getData:tt=>tt==='org.plcn.dropid'?'gone-n':'',types:['Files']}});
+        t.dispatchEvent(drop);
+        gameFilesDropSource({nonce:'gone-n',paths:[ext+'/BatchB.txt']});
+        gameFilesClipboard={root:document.getElementById('retroarch_root').value,
+            items:[{path:ext+'/BatchA.txt',name:'BatchA.txt',folder:false}]};
+    },ext);
+    await waitFor(()=>Boolean(window.__previewReady),'third preview in flight');
+    await evaluate(()=>document.querySelector('.game-files-toolbar button[aria-label="Paste"]:not([disabled])')?.click());
+    await waitFor(()=>Boolean(window.__pasteDone),'third paste running');
+    await evaluate(()=>window.__previewReady());
+    await new Promise(resolve=>setTimeout(resolve,250));
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/SubA'))?.querySelector('.btn')?.click();});
+    await evaluate(()=>window.__pasteDone());
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.match(/expired|失效/),
+        'navigation during the wait reports the batch expired');
+    assert.equal(await evaluate(()=>window.__calls.filter(c=>c.payload.action==='add').length),0,'expired batch issues no write');
+    // C-03d: a user navigation in flight outranks the post-import refresh.
+    await evaluate(name=>{[...document.querySelectorAll('.game-files-location .btn')].find(b=>b.textContent===name)?.click();},path.basename(browsePath));
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/SubA')),'back at parent again');
+    fs.mkdirSync(path.join(browsePath,'NavA'),{recursive:true});
+    fs.mkdirSync(path.join(browsePath,'Else'),{recursive:true});
+    await evaluate(()=>gameFilesView.refresh());
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/NavA')),'navigation rows visible');
+    await evaluate(ext=>{
+        window.__req=[];
+        window.__elseHeld=false;
+        const real=window.desktopRequest;
+        window.__realDR3=real;
+        window.desktopRequest=(route,payload)=>{
+            if(route.startsWith('/api/game-files/directory?path=')){
+                const dir=decodeURIComponent(route.split('path=')[1]);
+                if(dir.endsWith('/Else')&&!window.__elseHeld){
+                    window.__elseHeld=true;
+                    window.__req.push('else');
+                    return new Promise(r=>{window.__elseReady=()=>r(real(route,payload));});
+                }
+                window.__req.push(dir);
+            }
+            return real(route,payload);
+        };
+        window.__calls=[];
+        window.runGameJob=(route,payload)=>{const e={payload,finished:false};window.__calls.push(e);
+            return new Promise(r=>{window.__writeDone=()=>{e.finished=true;r({id:'x',result:{copied:['BatchA.txt'],replaced:[],
+                skipped:[],failed:[],remaining:[],kept:[],leftovers:[],written:[]}});};});};
+        const row=[...document.querySelectorAll('.game-files-row')]
+            .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/NavA'));
+        row.dispatchEvent(new Event('dragover',{bubbles:true}));
+        const drop=new Event('drop',{bubbles:true});
+        Object.defineProperty(drop,'timeStamp',{value:1201});
+        Object.defineProperty(drop,'dataTransfer',{value:{
+            files:[{name:'x'}],getData:tt=>tt==='org.plcn.dropid'?'navd':'',types:['Files']}});
+        row.dispatchEvent(drop);
+        gameFilesDropSource({nonce:'navd',paths:[ext+'/BatchA.txt']});
+    },ext);
+    await waitFor(()=>window.__calls?.length===1,'import write submitted to NavA');
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/Else'))?.querySelector('.btn')?.click();});
+    await waitFor(()=>window.__req?.includes('else'),'Else navigation issued');
+    await evaluate(()=>window.__writeDone());        // import completes while /Else is still loading
+    await new Promise(resolve=>setTimeout(resolve,300));
+    assert.equal(await evaluate(dir=>window.__req.filter(d=>d===dir).length,browsePath),0,'no stale-root refresh issued during navigation');
+    await evaluate(()=>window.__elseReady());
+    await waitFor(()=>document.querySelector('.game-files-location [aria-current]')?.textContent==='Else',
+        'view landed on Else');
+    assert.equal(await evaluate(()=>window.__calls.filter(c=>c.payload.action==='add').length),1,'import wrote exactly once');
+    assert.equal(await evaluate(()=>window.__calls[0].payload.directory.endsWith('/NavA')),true,'write went to NavA');
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.match(/Copied|已复制/),'import result still shown');
+    // C-03d reversed: navigation lands first, the write finishes after — the
+    // view stays on Else and the completed write still refreshes it.
+    await evaluate(name=>{[...document.querySelectorAll('.game-files-location .btn')].find(b=>b.textContent===name)?.click();},path.basename(browsePath));
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/NavA')),'back at parent once more');
+    await evaluate(ext=>{
+        window.__req=[];
+        window.__elseHeld=false;
+        window.__calls=[];
+        const row=[...document.querySelectorAll('.game-files-row')]
+            .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/NavA'));
+        row.dispatchEvent(new Event('dragover',{bubbles:true}));
+        const drop=new Event('drop',{bubbles:true});
+        Object.defineProperty(drop,'timeStamp',{value:1202});
+        Object.defineProperty(drop,'dataTransfer',{value:{
+            files:[{name:'x'}],getData:tt=>tt==='org.plcn.dropid'?'navr':'',types:['Files']}});
+        row.dispatchEvent(drop);
+        gameFilesDropSource({nonce:'navr',paths:[ext+'/BatchA.txt']});
+    },ext);
+    await waitFor(()=>window.__calls?.length===1,'second import write submitted');
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/Else'))?.querySelector('.btn')?.click();});
+    await waitFor(()=>window.__req?.includes('else'),'second Else navigation issued');
+    await evaluate(()=>window.__elseReady());        // navigation lands before the write finishes
+    await waitFor(()=>document.querySelector('.game-files-location [aria-current]')?.textContent==='Else',
+        'view on Else before write ends');
+    await evaluate(()=>window.__writeDone());
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.match(/Copied|已复制/),'late write result shown');
+    await waitFor(()=>window.__req.filter(d=>typeof d==='string'&&d.endsWith('/Else')).length>=1,'visible Else list refreshed after the write');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-location [aria-current]')?.textContent),'Else','view still on Else');
+    await evaluate(()=>{window.desktopRequest=window.__realDR3; window.runGameJob=window.__origRunGameJob;});
+    // Back to the parent folder for the stale-preview and detail scenarios.
+    await evaluate(name=>{[...document.querySelectorAll('.game-files-location .btn')].find(b=>b.textContent===name)?.click();},path.basename(browsePath));
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/NavA')),'parent listing again');
+    // C-03f: a preview sampled before a same-name paste must not submit —
+    // the response is stale, the batch re-samples and asks.
+    const extC=fs.mkdtempSync(path.join('/tmp','drop-c1-'));
+    const extD=fs.mkdtempSync(path.join('/tmp','drop-c2-'));
+    fs.writeFileSync(path.join(extC,'Clash.sfc'),'drop-source-bytes');
+    fs.writeFileSync(path.join(extD,'Clash.sfc'),'pasted-original');
+    await evaluate((c,d)=>{
+        window.__addCalls=[];
+        window.__pvCalls=[];     // preview payloads in issue order
+        window.__pvSamples=[];   // preview response promises in issue order
+        window.__pvHeld=false;
+        const real=window.desktopRequest;
+        window.__realDR4=real;
+        window.desktopRequest=(route,payload)=>{
+            if(route==='/api/game-files/file-ops'&&payload?.action==='add')window.__addCalls.push(payload);
+            if(route==='/api/game-files/import-preview'){
+                const sampled=real(route,payload);   // sample now, deliver later
+                window.__pvCalls.push(payload);
+                window.__pvSamples.push(sampled);
+                if(!window.__pvHeld){window.__pvHeld=true;
+                    return new Promise(r=>{window.__pvReady=()=>sampled.then(r,r);});}
+                return sampled;
+            }
+            return real(route,payload);
+        };
+        const t=document.querySelector('.game-files-table');
+        t.dispatchEvent(new Event('dragover',{bubbles:true}));
+        const drop=new Event('drop',{bubbles:true});
+        Object.defineProperty(drop,'timeStamp',{value:1301});
+        Object.defineProperty(drop,'dataTransfer',{value:{
+            files:[{name:'x'}],getData:tt=>tt==='org.plcn.dropid'?'stale-n':'',types:['Files']}});
+        t.dispatchEvent(drop);
+        gameFilesDropSource({nonce:'stale-n',paths:[c+'/Clash.sfc']});
+        gameFilesClipboard={root:document.getElementById('retroarch_root').value,
+            items:[{path:d+'/Clash.sfc',name:'Clash.sfc',folder:false}]};
+    },extC,extD);
+    await waitFor(()=>Boolean(window.__pvReady),'first preview issued to the landing');
+    const firstSample=await evaluate(()=>window.__pvSamples[0]);
+    assert.equal(firstSample.items.every(i=>!i.conflict),true,
+        'first sample actually returned conflict-free before the paste');
+    await evaluate(()=>document.querySelector('.game-files-toolbar button[aria-label="Paste"]:not([disabled])')?.click());
+    for(let i=0;i<200&&!fs.existsSync(path.join(browsePath,'Clash.sfc'));i++) await new Promise(r=>setTimeout(r,50));
+    assert.equal(fs.existsSync(path.join(browsePath,'Clash.sfc')),true,'paste wrote the same-name file');
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.match(/Pasted|已粘贴/),'paste summary shown');
+    await new Promise(resolve=>setTimeout(resolve,300));   // workbench releases in the finally block
+    assert.equal(await evaluate(()=>window.__pvCalls.length),1,'no re-sample before the stale response arrives');
+    await evaluate(()=>window.__pvReady());   // deliver the stale no-conflict response
+    await waitFor(()=>window.__pvCalls.length===2,'landing re-sampled after the stale response');
+    const resampled=await evaluate(()=>window.__pvSamples[1]);
+    assert.equal(resampled.items.some(i=>i.conflict),true,'fresh sample reports the pasted same-name item');
+    await waitFor(()=>Boolean(document.querySelector('.game-file-import-dialog')),
+        'stale preview discarded — fresh sample asks about the pasted same-name file');
+    assert.equal(await evaluate(()=>window.__addCalls.length),0,'no import submission before the user decides');
+    await evaluate(()=>document.querySelector('.game-file-import-dialog .btn-muted')?.click());
+    await waitFor(()=>!document.querySelector('.game-file-import-dialog'),'conflict cancelled');
+    assert.equal(await evaluate(()=>window.__addCalls.length),0,'cancelled — still no write');
+    assert.equal(fs.readFileSync(path.join(browsePath,'Clash.sfc'),'utf8'),'pasted-original','pasted bytes kept after cancel');
+    fs.unlinkSync(path.join(browsePath,'Clash.sfc'));
+    // C-03f approved replace: same stale sample, user checks replace — one
+    // submission, drop bytes win, the pasted original lands on a retained path.
+    fs.writeFileSync(path.join(extC,'Clash2.sfc'),'drop-replace-bytes');
+    fs.writeFileSync(path.join(extD,'Clash2.sfc'),'paste-keep-bytes');
+    const pvBase=await evaluate(()=>window.__pvCalls.length);
+    await evaluate((c,d)=>{
+        window.__pvHeld=false;   // re-arm the one-shot hold for this branch
+        const t=document.querySelector('.game-files-table');
+        t.dispatchEvent(new Event('dragover',{bubbles:true}));
+        const drop=new Event('drop',{bubbles:true});
+        Object.defineProperty(drop,'timeStamp',{value:1302});
+        Object.defineProperty(drop,'dataTransfer',{value:{
+            files:[{name:'x'}],getData:tt=>tt==='org.plcn.dropid'?'stale-2':'',types:['Files']}});
+        t.dispatchEvent(drop);
+        gameFilesDropSource({nonce:'stale-2',paths:[c+'/Clash2.sfc']});
+        gameFilesClipboard={root:document.getElementById('retroarch_root').value,
+            items:[{path:d+'/Clash2.sfc',name:'Clash2.sfc',folder:false}]};
+    },extC,extD);
+    await waitFor(base=>window.__pvCalls.length===base+1,'replace-branch preview issued',pvBase);
+    const secondSample=await evaluate(i=>window.__pvSamples[i],pvBase);
+    assert.equal(secondSample.items.every(i=>!i.conflict),true,
+        'replace-branch sample returned conflict-free before its paste');
+    await evaluate(()=>document.querySelector('.game-files-toolbar button[aria-label="Paste"]:not([disabled])')?.click());
+    for(let i=0;i<200&&!fs.existsSync(path.join(browsePath,'Clash2.sfc'));i++) await new Promise(r=>setTimeout(r,50));
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.match(/Pasted|已粘贴/),'second paste done');
+    await new Promise(resolve=>setTimeout(resolve,300));
+    await evaluate(()=>window.__pvReady());
+    await waitFor(base=>window.__pvCalls.length===base+2,'replace-branch landing re-sampled',pvBase);
+    const resample2=await evaluate(i=>window.__pvSamples[i],pvBase+1);
+    assert.equal(resample2.items.some(i=>i.conflict),true,'replace-branch fresh sample sees Clash2');
+    await waitFor(()=>Boolean(document.querySelector('.game-file-import-dialog')),'replace conflict offered');
+    assert.equal(await evaluate(()=>window.__addCalls.length),0,'still no write at dialog');
+    await evaluate(()=>{
+        const box=document.querySelector('.game-file-import-dialog .game-file-conflict input');
+        if(box)box.checked=true;
+        [...document.querySelectorAll('.game-file-import-dialog .btn')]
+            .find(b=>!b.className.includes('btn-muted'))?.click();});
+    for(let i=0;i<200&&(!fs.existsSync(path.join(browsePath,'Clash2.sfc'))
+        ||fs.readFileSync(path.join(browsePath,'Clash2.sfc'),'utf8')!=='drop-replace-bytes');i++)
+        await new Promise(r=>setTimeout(r,50));
+    assert.equal(await evaluate(()=>window.__addCalls.length),1,'approved replace submits exactly once');
+    assert.equal(fs.readFileSync(path.join(browsePath,'Clash2.sfc'),'utf8'),'drop-replace-bytes','target holds the dropped bytes');
+    const retained=fs.readdirSync(browsePath).find(n=>n.startsWith('Clash2.sfc.plcn-old-'));
+    assert.equal(Boolean(retained),true,'original retained under a kept path');
+    const keptPath=fs.statSync(path.join(browsePath,retained)).isDirectory()
+        ? path.join(browsePath,retained,'Clash2.sfc') : path.join(browsePath,retained);
+    assert.equal(fs.readFileSync(keptPath,'utf8'),'paste-keep-bytes','retained original keeps the pasted bytes');
+    await waitFor(()=>document.querySelector('.game-files-detail')?.textContent.includes('.plcn-old-'),'retained path reported in details');
+    for(const name of fs.readdirSync(browsePath)) if(name.startsWith('Clash2.sfc')) fs.rmSync(path.join(browsePath,name),{recursive:true,force:true});
+    // C-03g: landing on the write target replays the refresh — the write's
+    // summary and its full operation detail survive together.
+    fs.mkdirSync(path.join(browsePath,'DetailA'),{recursive:true});
+    fs.writeFileSync(path.join(extC,'BatchA.txt'),'detail-drop');
+    await evaluate(()=>gameFilesView.refresh());
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/DetailA')),'detail target row visible');
+    await evaluate(c=>{
+        window.__calls=[];
+        window.__heldA=false;
+        const real=window.desktopRequest;
+        window.desktopRequest=(route,payload)=>{
+            if(route.startsWith('/api/game-files/directory?path=')){
+                const dir=decodeURIComponent(route.split('path=')[1]);
+                if(dir.endsWith('/DetailA')&&!window.__heldA){window.__heldA=true;
+                    return new Promise(r=>{window.__aReady=()=>r(real(route,payload));});}
+            }
+            return real(route,payload);
+        };
+        window.runGameJob=(route,payload)=>{const e={payload,finished:false};window.__calls.push(e);
+            return new Promise(r=>{window.__gDone=()=>{e.finished=true;r({id:'x',result:{
+                copied:['BatchA.txt'],replaced:['a.sfc'],skipped:[],failed:[],remaining:[],kept:[],
+                leftovers:['/ret/p1','/ret/p2','/ret/p3','/ret/p4','/ret/p5']
+                    .map((p,i)=>({name:'n'+(i+1)+'.sfc',path:p,reason:'原件已保留，核对后可手动删除'})),
+                written:[]}});};});};
+        const row=[...document.querySelectorAll('.game-files-row')]
+            .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/DetailA'));
+        row.dispatchEvent(new Event('dragover',{bubbles:true}));
+        const drop=new Event('drop',{bubbles:true});
+        Object.defineProperty(drop,'timeStamp',{value:1401});
+        Object.defineProperty(drop,'dataTransfer',{value:{
+            files:[{name:'x'}],getData:tt=>tt==='org.plcn.dropid'?'det-n':'',types:['Files']}});
+        row.dispatchEvent(drop);
+        gameFilesDropSource({nonce:'det-n',paths:[c+'/BatchA.txt']});
+    },extC);
+    await waitFor(()=>window.__calls?.length===1,'detail import write submitted');
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/DetailA'))?.querySelector('.btn')?.click();});
+    await waitFor(()=>Boolean(window.__aReady),'DetailA navigation held');
+    await evaluate(()=>window.__gDone());   // write ends while the nav is in flight
+    await waitFor(()=>document.querySelectorAll('.game-files-detail .game-files-detail-item').length===5,
+        'ops detail rendered at write end');
+    await evaluate(()=>window.__aReady());  // nav response lands
+    await waitFor(()=>document.querySelector('.game-files-location [aria-current]')?.textContent==='DetailA',
+        'view landed on DetailA');
+    await waitFor(()=>document.querySelectorAll('.game-files-detail .game-files-detail-item').length===5,
+        'detail survives the replayed refresh');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail')?.textContent.includes('/ret/p5')),true,
+        'fifth retained path reachable from the result');
+    assert.equal(await evaluate(()=>window.__calls.filter(c=>c.payload.action==='add').length),1,'import wrote exactly once');
+    await evaluate(()=>{window.desktopRequest=window.__realDR4; window.runGameJob=window.__origRunGameJob;});
+    // Back to the parent folder for the replayed-refresh scenarios.
+    await evaluate(name=>{[...document.querySelectorAll('.game-files-location .btn')]
+        .find(b=>b.textContent===name)?.click();},path.basename(browsePath));
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/DetailA')),'parent listing for replay checks');
+    // C-03h stale replay: a deferred same-folder refresh that lands after the
+    // user moved on must not restore the older task's summary/detail.
+    fs.mkdirSync(path.join(browsePath,'ReplayA'),{recursive:true});
+    fs.mkdirSync(path.join(browsePath,'ReplayB'),{recursive:true});
+    fs.writeFileSync(path.join(extD,'PasteOne.bin'),'replay-paste');
+    fs.writeFileSync(path.join(extC,'ReplayDrop.bin'),'replay-drop');
+    await evaluate(()=>gameFilesView.refresh());
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/ReplayB')),'replay rows visible');
+    await evaluate((roms,c,d)=>{
+        window.__extC=c;
+        window.__extD=d;
+        window.__foCalls=[];
+        window.__romsReqs=0;
+        window.__roms=roms;
+        window.__failReplay=false;
+        window.__holdRoms=true;
+        const real=window.desktopRequest;
+        window.__realDR6=real;
+        window.desktopRequest=(route,payload)=>{
+            if(route==='/api/game-files/file-ops')window.__foCalls.push(payload.action);
+            if(route.startsWith('/api/game-files/directory?path=')){
+                const dir=decodeURIComponent(route.split('path=')[1]);
+                if(dir===window.__roms&&window.__holdRoms){window.__romsReqs+=1;
+                    if(window.__romsReqs===1)
+                        return new Promise(r=>{window.__navReady=()=>r(real(route,payload));});
+                    if(window.__romsReqs===2){
+                        if(window.__failReplay)return Promise.reject(new Error('disk gone'));
+                        return new Promise(r=>{window.__rfReady=()=>r(real(route,payload));});
+                    }
+                }
+            }
+            return real(route,payload);
+        };
+    },browsePath,extC,extD);
+    // Enter ReplayA, then start a parent navigation whose response is held.
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/ReplayA'))?.querySelector('.btn')?.click();});
+    await waitFor(()=>document.querySelector('.game-files-location [aria-current]')?.textContent==='ReplayA','inside ReplayA');
+    await evaluate(()=>document.querySelector('.game-files-toolbar button[aria-label*="Parent"],'+
+        '.game-files-toolbar button[aria-label*="上级"]')?.click());
+    await waitFor(()=>Boolean(window.__navReady),'parent navigation held');
+    // The old view is still operable: paste runs against ReplayA while the
+    // navigation response is outstanding.
+    await evaluate(()=>{
+        gameFilesClipboard={root:document.getElementById('retroarch_root').value,
+            items:[{path:window.__extD+'/PasteOne.bin',name:'PasteOne.bin',folder:false}]};
+        document.querySelector('.game-files-toolbar button[aria-label="Paste"]:not([disabled])')?.click();
+    });
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.match(/Pasted|已粘贴/),'replay paste done');
+    await evaluate(()=>window.__navReady());   // parent list lands: ReplayA + ReplayB
+    await waitFor(()=>Boolean(window.__rfReady),'deferred parent refresh issued');
+    // Move on to ReplayB and finish a newer import before the old refresh returns.
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/ReplayB'))?.querySelector('.btn')?.click();});
+    await waitFor(()=>document.querySelector('.game-files-location [aria-current]')?.textContent==='ReplayB','inside ReplayB');
+    await evaluate(()=>{
+        window.__calls=[];
+        window.runGameJob=(route,payload)=>{const e={payload,finished:false};window.__calls.push(e);
+            return new Promise(r=>{window.__gDone=()=>{e.finished=true;r({id:'x',result:{
+                copied:['ReplayDrop.bin'],replaced:[],skipped:[],failed:[],remaining:[],kept:[],
+                leftovers:[{name:'h1.sfc',path:'/h-ret/p1',reason:'原件已保留'},{name:'h2.sfc',path:'/h-ret/p2',reason:'原件已保留'}],
+                written:[]}});};});};
+        const t=document.querySelector('.game-files-table');
+        t.dispatchEvent(new Event('dragover',{bubbles:true}));
+        const drop=new Event('drop',{bubbles:true});
+        Object.defineProperty(drop,'timeStamp',{value:1501});
+        Object.defineProperty(drop,'dataTransfer',{value:{
+            files:[{name:'x'}],getData:tt=>tt==='org.plcn.dropid'?'rep-n':'',types:['Files']}});
+        t.dispatchEvent(drop);
+        gameFilesDropSource({nonce:'rep-n',paths:[window.__extC+'/ReplayDrop.bin']});
+    });
+    await waitFor(()=>window.__calls?.length===1,'replay import submitted');
+    await evaluate(()=>window.__gDone());
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('Copied'),'new import result shown');
+    await waitFor(()=>document.querySelector('.game-files-detail')?.textContent.includes('/h-ret/p2'),'import detail rendered');
+    // Now the stale replayed refresh returns — nothing may be restored.
+    await evaluate(()=>window.__rfReady());
+    await new Promise(resolve=>setTimeout(resolve,400));
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-location [aria-current]')?.textContent),'ReplayB','still inside ReplayB');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('Copied')),true,'new import summary kept');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('Pasted')),false,'stale paste summary not restored');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail')?.textContent.includes('/h-ret/p2')),true,'import detail kept');
+    assert.equal(await evaluate(()=>window.__foCalls.filter(a=>a==='copy').length),1,'paste submitted once');
+    assert.equal(await evaluate(()=>window.__calls.filter(c=>c.payload.action==='add').length),1,'import submitted once');
+    // C-03h read error: a still-valid replayed refresh that fails keeps the
+    // error visible — the deferred restore must not overwrite it.
+    fs.mkdirSync(path.join(browsePath,'FailA'),{recursive:true});
+    fs.writeFileSync(path.join(extD,'PasteTwo.bin'),'replay-paste-2');
+    await evaluate(()=>{
+        window.__holdRoms=false;   // let the plain parent navigation through
+        window.__romsReqs=0;
+        window.__navReady=null;
+        window.__rfReady=null;
+        window.__failReplay=true;
+        window.runGameJob=window.__origRunGameJob;
+    });
+    await evaluate(name=>{[...document.querySelectorAll('.game-files-location .btn')]
+        .find(b=>b.textContent===name)?.click();},path.basename(browsePath));
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/FailA')),'fail target row visible');
+    await evaluate(()=>{window.__holdRoms=true;window.__romsReqs=0;});
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/FailA'))?.querySelector('.btn')?.click();});
+    await waitFor(()=>document.querySelector('.game-files-location [aria-current]')?.textContent==='FailA','inside FailA');
+    await evaluate(()=>document.querySelector('.game-files-toolbar button[aria-label*="Parent"],'+
+        '.game-files-toolbar button[aria-label*="上级"]')?.click());
+    await waitFor(()=>Boolean(window.__navReady),'fail-branch navigation held');
+    await evaluate(()=>{
+        gameFilesClipboard={root:document.getElementById('retroarch_root').value,
+            items:[{path:window.__extD+'/PasteTwo.bin',name:'PasteTwo.bin',folder:false}]};
+        document.querySelector('.game-files-toolbar button[aria-label="Paste"]:not([disabled])')?.click();
+    });
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.match(/Pasted|已粘贴/),'fail-branch paste done');
+    await evaluate(()=>window.__navReady());   // parent applies → deferred refresh will reject
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('disk gone'),'read error surfaced');
+    await new Promise(resolve=>setTimeout(resolve,400));
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('disk gone')),true,'read error not overwritten');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('Pasted')),false,'old task summary not restored over the error');
+    await evaluate(()=>{window.desktopRequest=window.__realDR6; window.runGameJob=window.__origRunGameJob;});
+    // C-03j: when the refresh right after a finished write fails, the read
+    // error stays in the status line and the write result leads the detail
+    // block — for import, paste and delete alike.
+    fs.mkdirSync(path.join(browsePath,'WriteA'),{recursive:true});
+    fs.mkdirSync(path.join(browsePath,'WriteB'),{recursive:true});
+    fs.mkdirSync(path.join(browsePath,'WriteC'),{recursive:true});
+    fs.writeFileSync(path.join(browsePath,'WriteC','Gone.bin'),'to-delete');
+    fs.writeFileSync(path.join(extC,'WriteDrop.bin'),'write-drop-bytes');
+    fs.mkdirSync(path.join(extD,'WritePack'),{recursive:true});
+    fs.writeFileSync(path.join(extD,'WritePack','p1.bin'),'p1');
+    // The fail-branch left the browse folder as the terminal crumb — go one
+    // level up and re-enter it through the folder row.
+    await evaluate(()=>{const btns=[...document.querySelectorAll('.game-files-location .btn')];
+        btns[btns.length-1]?.click();});
+    await waitFor(name=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/'+name)),
+        'parent of browse lists it',path.basename(browsePath));
+    await evaluate(name=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/'+name))?.querySelector('.btn')?.click();},
+        path.basename(browsePath));
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/WriteC')),'write rows visible');
+    await evaluate(()=>{
+        window.__foCalls=[];
+        window.__failReads=false;
+        const real=window.desktopRequest;
+        window.__realDR8=real;
+        window.desktopRequest=(route,payload)=>{
+            if(route==='/api/game-files/file-ops')window.__foCalls.push(payload.action);
+            if(window.__failReads&&route.startsWith('/api/game-files/directory?'))
+                return Promise.reject(new Error('disk gone'));
+            return real(route,payload);
+        };
+    });
+    // Import: real write into WriteA, then the refresh read fails.
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/WriteA'))?.querySelector('.btn')?.click();});
+    await waitFor(()=>document.querySelector('.game-files-location [aria-current]')?.textContent==='WriteA','inside WriteA');
+    await evaluate(()=>{
+        window.__failReads=true;
+        const t=document.querySelector('.game-files-table');
+        t.dispatchEvent(new Event('dragover',{bubbles:true}));
+        const drop=new Event('drop',{bubbles:true});
+        Object.defineProperty(drop,'timeStamp',{value:1601});
+        Object.defineProperty(drop,'dataTransfer',{value:{
+            files:[{name:'x'}],getData:tt=>tt==='org.plcn.dropid'?'wri-n':'',types:['Files']}});
+        t.dispatchEvent(drop);
+        gameFilesDropSource({nonce:'wri-n',paths:[window.__extC+'/WriteDrop.bin']});
+    });
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('disk gone'),
+        'import-fail read error surfaced');
+    assert.equal(fs.readFileSync(path.join(browsePath,'WriteA','WriteDrop.bin'),'utf8'),'write-drop-bytes',
+        'imported bytes landed on disk');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('Copied')),false,
+        'summary did not overwrite the read error');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail')?.textContent.includes('Copied')),true,
+        'import summary still inspectable in the detail block');
+    assert.equal(await evaluate(()=>window.__foCalls.filter(a=>a==='add').length),1,'import submitted once');
+    // Paste: fake job returns a partial result; refresh fails — written
+    // paths stay inspectable next to the error.
+    await evaluate(name=>{window.__failReads=false;
+        [...document.querySelectorAll('.game-files-location .btn')]
+            .find(b=>b.textContent===name)?.click();},path.basename(browsePath));
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/WriteB')),'parent rows after import-fail');
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/WriteB'))?.querySelector('.btn')?.click();});
+    await waitFor(()=>document.querySelector('.game-files-location [aria-current]')?.textContent==='WriteB','inside WriteB');
+    await evaluate(()=>{
+        window.__failReads=true;
+        window.__calls=[];
+        window.runGameJob=(route,payload)=>{window.__calls.push({payload});
+            return Promise.resolve({id:'x',result:{items:[
+                {name:'WritePack',status:'partial',target:'WritePack',written:['WritePack/p1.bin'],error:'io stopped'},
+                {name:'Other.bin',status:'copied'}],cancelled:false}});};
+        gameFilesClipboard={root:document.getElementById('retroarch_root').value,
+            items:[{path:window.__extD+'/WritePack',name:'WritePack',folder:true},
+                   {path:window.__extD+'/WritePack/p1.bin',name:'p1.bin',folder:false}]};
+        document.querySelector('.game-files-toolbar button[aria-label="Paste"]:not([disabled])')?.click();
+    });
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('disk gone'),
+        'paste-fail read error surfaced');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail')?.textContent.includes('WritePack/p1.bin')),true,
+        'partial written paths inspectable next to the error');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('Pasted')),false,
+        'paste summary did not overwrite the error');
+    assert.equal(await evaluate(()=>window.__calls.length),1,'paste submitted once');
+    // Delete: real file-ops removes the row; refresh fails — error stays.
+    await evaluate(()=>{window.__failReads=false;window.runGameJob=window.__origRunGameJob;});
+    await evaluate(name=>{[...document.querySelectorAll('.game-files-location .btn')]
+        .find(b=>b.textContent===name)?.click();},path.basename(browsePath));
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/WriteC')),'parent rows for delete');
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/WriteC'))?.querySelector('.btn')?.click();});
+    await waitFor(()=>document.querySelector('.game-files-location [aria-current]')?.textContent==='WriteC','inside WriteC');
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.path?.endsWith('/Gone.bin'))?.querySelector('.btn')?.click();});
+    await evaluate(()=>{
+        window.__failReads=true;
+        document.querySelector('.game-files-toolbar button[aria-label="Delete file"]:not([disabled])')?.click();
+    });
+    await waitFor(()=>Boolean(document.querySelector('.game-file-delete-dialog')),'delete dialog open');
+    await evaluate(()=>document.querySelector('.game-file-delete-dialog .btn:not(.btn-muted)')?.click());
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('disk gone'),
+        'delete-fail read error surfaced');
+    assert.equal(fs.existsSync(path.join(browsePath,'WriteC','Gone.bin')),false,'file actually deleted');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail')?.textContent.length>0),true,
+        'delete result inspectable in the detail block');
+    assert.equal(await evaluate(()=>window.__foCalls.filter(a=>a==='delete').length),1,'delete submitted once');
+    // Recovery: reads work again — navigate back; only reads, no re-writes.
+    await evaluate(()=>{window.__failReads=false;window.__foCalls=[];});
+    await evaluate(name=>{[...document.querySelectorAll('.game-files-location .btn')]
+        .find(b=>b.textContent===name)?.click();},path.basename(browsePath));
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/WriteA')),'parent listing recovered');
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/WriteA'))?.querySelector('.btn')?.click();});
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/WriteDrop.bin')),'written file listed after recovery');
+    assert.equal(await evaluate(()=>window.__foCalls.length),0,'recovery issued only reads');
+    await evaluate(()=>{window.desktopRequest=window.__realDR8;window.runGameJob=window.__origRunGameJob;});
+    // C-03k: a write-refresh in flight while a navigation fails — both
+    // response orders keep the nav's read error and the write result.
+    fs.mkdirSync(path.join(browsePath,'NavK','KSub'),{recursive:true});
+    fs.mkdirSync(path.join(browsePath,'NavL','LSub'),{recursive:true});
+    fs.mkdirSync(path.join(browsePath,'NavM','MSub'),{recursive:true});
+    fs.writeFileSync(path.join(extC,'KDrop.bin'),'k-drop-bytes');
+    fs.writeFileSync(path.join(extC,'LDrop.bin'),'l-drop-bytes');
+    await evaluate(name=>{[...document.querySelectorAll('.game-files-location .btn')]
+        .find(b=>b.textContent===name)?.click();},path.basename(browsePath));
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/NavL')),'nav-fail rows visible');
+    await evaluate(()=>{
+        window.__foCalls=[];window.__foFull=[];
+        const real=window.desktopRequest;
+        window.__realDR10=real;
+        window.desktopRequest=(route,payload)=>{
+            if(route==='/api/game-files/file-ops'){window.__foCalls.push(payload.action);
+                window.__foFull.push({dir:payload.directory,srcs:payload.sources});}
+            if(route.startsWith('/api/game-files/directory?path=')){
+                const dir=decodeURIComponent(route.split('path=')[1]);
+                if(dir===window.__holdDir){window.__holdDir=null;
+                    const sampled=real(route,payload);   // request now, deliver later
+                    return new Promise(r=>{window.__refReady=()=>sampled.then(r,r);});}
+                if(dir===window.__navHoldDir){window.__navHoldDir=null;
+                    const sampled=real(route,payload);   // held successful navigation
+                    return new Promise((r,x)=>{window.__navReady=()=>sampled.then(r,x);});}
+                if(dir===window.__failDir){window.__failDir=null;
+                    if(window.__failNow)return Promise.reject(new Error('folder B unreadable'));
+                    return new Promise((r,x)=>{window.__navFail=()=>x(new Error('folder B unreadable'));});}
+            }
+            return real(route,payload);
+        };
+    });
+    const enterDir=async name=>{
+        await evaluate(n=>{[...document.querySelectorAll('.game-files-row')]
+            .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/'+n))?.querySelector('.btn')?.click();},name);
+        await waitFor(n=>document.querySelector('.game-files-location [aria-current]')?.textContent===n,
+            'inside '+name,name);
+    };
+    const dropFile=async(file,nonce,ts)=>evaluate((f,n,t)=>{
+        const t2=document.querySelector('.game-files-table');
+        t2.dispatchEvent(new Event('dragover',{bubbles:true}));
+        const drop=new Event('drop',{bubbles:true});
+        Object.defineProperty(drop,'timeStamp',{value:t});
+        Object.defineProperty(drop,'dataTransfer',{value:{
+            files:[{name:'x'}],getData:tt=>tt==='org.plcn.dropid'?n:'',types:['Files']}});
+        t2.dispatchEvent(drop);
+        gameFilesDropSource({nonce:n,paths:[f]});
+    },file,nonce,ts);
+    // Shared per-cell verification for the two-batch matrix: exactly one
+    // write — batch 1's sources into the right target — its bytes on disk,
+    // batch 2's target absent.
+    const assertBatchOnce=async(dir,file1,bytes,file2)=>{
+        assert.equal(fs.readFileSync(path.join(browsePath,dir,file1),'utf8'),bytes,dir+' bytes on disk');
+        assert.equal(fs.existsSync(path.join(browsePath,dir,file2)),false,dir+' second batch never wrote');
+        assert.equal(await evaluate((d,f1)=>{const f=window.__foFull;return f.length===1
+            &&f[0].dir.endsWith('/'+d)&&f[0].srcs.some(s=>s.endsWith('/'+f1));},dir,file1),true,
+            dir+' only the first batch submitted to its target');
+    };
+    // Shared recovery: back to the parent listing and into the target — the
+    // written file is listed, the count stays one, nothing replays.
+    const recoverCheck=async(dir,file1)=>{
+        await evaluate(name=>{[...document.querySelectorAll('.game-files-location .btn')]
+            .find(b=>b.textContent===name)?.click();},path.basename(browsePath));
+        await waitFor(d=>[...document.querySelectorAll('.game-files-row')]
+            .some(r=>r.dataset.path?.endsWith('/'+d)),'parent listing for '+dir,dir);
+        await enterDir(dir);
+        await waitFor(f1=>[...document.querySelectorAll('.game-files-row')]
+            .some(r=>r.dataset.path?.endsWith('/'+f1)),dir+' batch file listed after recovery',file1);
+        assert.equal(await evaluate(()=>/expired|失效/.test(document.querySelector('.game-files-detail')?.textContent||'')),false,
+            dir+' no settled notice replayed on recovery');
+        assert.equal(await evaluate(()=>window.__foCalls.length),1,dir+' recovery issued no extra writes');
+    };
+    // Order 1: nav fails first, then the stale write-refresh returns.
+    await enterDir('NavK');
+    await evaluate(dir=>{window.__holdDir=dir;window.__failDir=dir+'/KSub';window.__failNow=true;
+        window.__refReady=null;window.__navFail=null;},browsePath+'/NavK');
+    await dropFile(path.join(extC,'KDrop.bin'),'kn',1701);
+    await waitFor(()=>Boolean(window.__refReady),'K write refresh held');
+    assert.equal(await evaluate(()=>window.__foCalls.filter(a=>a==='add').length),1,'K import wrote once');
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/KSub'))?.querySelector('.btn')?.click();});
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('folder B unreadable'),
+        'KSub read error shown first');
+    await evaluate(()=>window.__refReady());   // stale refresh returns after the error
+    await new Promise(resolve=>setTimeout(resolve,400));
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('folder B unreadable')),true,
+        'nav read error survives the stale refresh');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('Copied')),false,
+        'stale write summary did not overwrite the error');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail')?.textContent.includes('Copied')),true,
+        'write result inspectable beside the error');
+    assert.equal(fs.readFileSync(path.join(browsePath,'NavK','KDrop.bin'),'utf8'),'k-drop-bytes','K bytes on disk');
+    assert.equal(await evaluate(()=>window.__foCalls.filter(a=>a==='add').length),1,'still one write');
+    // Order 2: stale refresh returns while the nav is still waiting, then
+    // the nav read fails — the parked write result settles on the failure.
+    await evaluate(name=>{[...document.querySelectorAll('.game-files-location .btn')]
+        .find(b=>b.textContent===name)?.click();},path.basename(browsePath));
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/NavL')),'back at parent for order 2');
+    await enterDir('NavL');
+    await evaluate(dir=>{window.__holdDir=dir;window.__failDir=dir+'/LSub';window.__failNow=false;
+        window.__refReady=null;window.__navFail=null;},browsePath+'/NavL');
+    await dropFile(path.join(extC,'LDrop.bin'),'ln',1702);
+    await waitFor(()=>Boolean(window.__refReady),'L write refresh held');
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/LSub'))?.querySelector('.btn')?.click();});
+    await waitFor(()=>Boolean(window.__navFail),'LSub navigation held');
+    await evaluate(()=>window.__refReady());   // stale refresh first — result parked
+    await evaluate(()=>window.__navFail());    // then the navigation fails
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('folder B unreadable'),
+        'LSub read error shown');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('folder B unreadable')),true,
+        'nav error kept after parked result settled');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail')?.textContent.includes('Copied')),true,
+        'parked write result settled into details');
+    assert.equal(fs.readFileSync(path.join(browsePath,'NavL','LDrop.bin'),'utf8'),'l-drop-bytes','L bytes on disk');
+    assert.equal(await evaluate(()=>window.__foCalls.filter(a=>a==='add').length),2,'one write per order');
+    // A later successful navigation must not replay the already-settled result.
+    await evaluate(name=>{[...document.querySelectorAll('.game-files-location .btn')]
+        .find(b=>b.textContent===name)?.click();},path.basename(browsePath));
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/NavL')),'parent listing after fail');
+    await new Promise(resolve=>setTimeout(resolve,300));
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail')?.textContent||''),'',
+        'settled result did not replay on the next navigation');
+    assert.equal(await evaluate(()=>window.__foCalls.length),2,'no repeated writes');
+    // C-03l: a second matched batch expires after the nav failure — its
+    // notice must not bury the read error or the first batch's result.
+    fs.writeFileSync(path.join(extC,'MDrop1.bin'),'m-drop1-bytes');
+    fs.writeFileSync(path.join(extC,'MDrop2.bin'),'m-drop2-bytes');
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/NavM')),'nav-m row visible');
+    await enterDir('NavM');
+    await evaluate(dir=>{window.__holdDir=dir;window.__failDir=dir+'/MSub';window.__failNow=true;
+        window.__refReady=null;window.__navFail=null;window.__foCalls=[];window.__foFull=[];},browsePath+'/NavM');
+    await dropFile(path.join(extC,'MDrop1.bin'),'m1',1801);
+    await dropFile(path.join(extC,'MDrop2.bin'),'m2',1802);
+    await waitFor(()=>Boolean(window.__refReady),'M write refresh held');
+    assert.equal(await evaluate(()=>window.__foCalls.filter(a=>a==='add').length),1,'M first batch wrote once');
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/MSub'))?.querySelector('.btn')?.click();});
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('folder B unreadable'),
+        'MSub read error shown first');
+    await evaluate(()=>window.__refReady());   // stale refresh returns; the queue then dequeues batch 2
+    await waitFor(()=>{const t=document.querySelector('.game-files-detail')?.textContent||'';
+        return /expired|失效/.test(t);},'expired notice reached the detail block');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('folder B unreadable')),true,
+        'read error survives the expired batch notice');
+    assert.equal(await evaluate(()=>/expired|失效/.test(document.querySelector('.game-files-status').textContent)),false,
+        'expired notice did not overwrite the error');
+    assert.equal(await evaluate(()=>{const t=document.querySelector('.game-files-detail')?.textContent||'';
+        return t.includes('Copied')&&/expired|失效/.test(t);}),true,
+        'first result and expired feedback both in the detail block');
+    await assertBatchOnce('NavM','MDrop1.bin','m-drop1-bytes','MDrop2.bin');
+    await recoverCheck('NavM','MDrop1.bin');
+    // C-03m: same two-batch setup but the stale refresh returns while the
+    // navigation is still waiting — batch 2 expires during the wait, then
+    // the nav fails; its notice must survive into the detail block.
+    fs.mkdirSync(path.join(browsePath,'NavN','NSub'),{recursive:true});
+    fs.writeFileSync(path.join(extC,'NDrop1.bin'),'n-drop1-bytes');
+    fs.writeFileSync(path.join(extC,'NDrop2.bin'),'n-drop2-bytes');
+    await evaluate(name=>{[...document.querySelectorAll('.game-files-location .btn')]
+        .find(b=>b.textContent===name)?.click();},path.basename(browsePath));
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/NavN')),'nav-n row visible');
+    await enterDir('NavN');
+    await evaluate(dir=>{window.__holdDir=dir;window.__failDir=dir+'/NSub';window.__failNow=false;
+        window.__refReady=null;window.__navFail=null;window.__foCalls=[];window.__foFull=[];},browsePath+'/NavN');
+    await dropFile(path.join(extC,'NDrop1.bin'),'n1',1901);
+    await dropFile(path.join(extC,'NDrop2.bin'),'n2',1902);
+    await waitFor(()=>Boolean(window.__refReady),'N write refresh held');
+    assert.equal(await evaluate(()=>window.__foCalls.filter(a=>a==='add').length),1,'N first batch wrote once');
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/NSub'))?.querySelector('.btn')?.click();});
+    await waitFor(()=>Boolean(window.__navFail),'NSub navigation held');
+    await evaluate(()=>window.__refReady());   // stale refresh first — batch 2 expires during the wait
+    await waitFor(()=>/expired|失效/.test(document.querySelector('.game-files-status').textContent),
+        'second batch reported expired while the nav waited');
+    await evaluate(()=>window.__navFail());    // then the navigation fails
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('folder B unreadable'),
+        'NSub read error shown');
+    await new Promise(resolve=>setTimeout(resolve,300));
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('folder B unreadable')),true,
+        'nav error kept after the wait-time expiry');
+    assert.equal(await evaluate(()=>{const t=document.querySelector('.game-files-detail')?.textContent||'';
+        return t.includes('Copied')&&/expired|失效/.test(t);}),true,
+        'first result and expired feedback both kept in the detail block');
+    await assertBatchOnce('NavN','NDrop1.bin','n-drop1-bytes','NDrop2.bin');
+    await recoverCheck('NavN','NDrop1.bin');
+    // C-03n cell 1 — navigation SUCCEEDS, stale refresh settles first: the
+    // parked write result and the wait-time expiry notice must both be
+    // inspectable after the landing.
+    fs.mkdirSync(path.join(browsePath,'NavP','PSub'),{recursive:true});
+    fs.writeFileSync(path.join(extC,'PDrop1.bin'),'p-drop1-bytes');
+    fs.writeFileSync(path.join(extC,'PDrop2.bin'),'p-drop2-bytes');
+    await evaluate(name=>{[...document.querySelectorAll('.game-files-location .btn')]
+        .find(b=>b.textContent===name)?.click();},path.basename(browsePath));
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/NavP')),'nav-p row visible');
+    await enterDir('NavP');
+    await evaluate(dir=>{window.__holdDir=dir;window.__navHoldDir=dir+'/PSub';
+        window.__refReady=null;window.__navReady=null;window.__foCalls=[];window.__foFull=[];},browsePath+'/NavP');
+    await dropFile(path.join(extC,'PDrop1.bin'),'p1',2001);
+    await dropFile(path.join(extC,'PDrop2.bin'),'p2',2002);
+    await waitFor(()=>Boolean(window.__refReady),'P write refresh held');
+    assert.equal(await evaluate(()=>window.__foCalls.filter(a=>a==='add').length),1,'P first batch wrote once');
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/PSub'))?.querySelector('.btn')?.click();});
+    await waitFor(()=>Boolean(window.__navReady),'PSub navigation held');
+    await evaluate(()=>window.__refReady());   // stale refresh first — write parks, batch 2 expires in the wait
+    await waitFor(()=>/expired|失效/.test(document.querySelector('.game-files-status').textContent),
+        'P second batch reported expired while the nav waited');
+    await evaluate(()=>window.__navReady());   // then the navigation lands
+    await waitFor(()=>document.querySelector('.game-files-location [aria-current]')?.textContent==='PSub',
+        'P landed in the new directory');
+    await waitFor(()=>/expired|失效/.test(document.querySelector('.game-files-detail')?.textContent||''),
+        'P expired feedback kept in the detail block');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('Copied')),true,
+        'P first batch summary restored after the landing');
+    await assertBatchOnce('NavP','PDrop1.bin','p-drop1-bytes','PDrop2.bin');
+    await recoverCheck('NavP','PDrop1.bin');
+    // C-03n cell 2 — navigation SUCCEEDS and lands first: the write summary
+    // arrives via the stale refresh, then batch 2 expires — the notice must
+    // not bury the first batch's result.
+    fs.mkdirSync(path.join(browsePath,'NavQ','QSub'),{recursive:true});
+    fs.writeFileSync(path.join(extC,'QDrop1.bin'),'q-drop1-bytes');
+    fs.writeFileSync(path.join(extC,'QDrop2.bin'),'q-drop2-bytes');
+    await evaluate(name=>{[...document.querySelectorAll('.game-files-location .btn')]
+        .find(b=>b.textContent===name)?.click();},path.basename(browsePath));
+    await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
+        .some(r=>r.dataset.path?.endsWith('/NavQ')),'nav-q row visible');
+    await enterDir('NavQ');
+    await evaluate(dir=>{window.__holdDir=dir;window.__navHoldDir=dir+'/QSub';
+        window.__refReady=null;window.__navReady=null;window.__foCalls=[];window.__foFull=[];},browsePath+'/NavQ');
+    await dropFile(path.join(extC,'QDrop1.bin'),'q1',2101);
+    await dropFile(path.join(extC,'QDrop2.bin'),'q2',2102);
+    await waitFor(()=>Boolean(window.__refReady),'Q write refresh held');
+    assert.equal(await evaluate(()=>window.__foCalls.filter(a=>a==='add').length),1,'Q first batch wrote once');
+    await evaluate(()=>{[...document.querySelectorAll('.game-files-row')]
+        .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/QSub'))?.querySelector('.btn')?.click();});
+    await waitFor(()=>Boolean(window.__navReady),'QSub navigation held');
+    await evaluate(()=>window.__navReady());   // the navigation lands first
+    await waitFor(()=>document.querySelector('.game-files-location [aria-current]')?.textContent==='QSub',
+        'Q landed before the stale refresh');
+    await evaluate(()=>window.__refReady());   // stale refresh — write result lands, batch 2 then expires
+    await waitFor(()=>/expired|失效/.test(document.querySelector('.game-files-status').textContent),
+        'Q second batch reported expired');
+    await waitFor(()=>{const t=document.querySelector('.game-files-detail')?.textContent||'';
+        return t.includes('Copied')&&/expired|失效/.test(t);},'Q both feedbacks kept in the detail block');
+    await assertBatchOnce('NavQ','QDrop1.bin','q-drop1-bytes','QDrop2.bin');
+    await recoverCheck('NavQ','QDrop1.bin');
+    await evaluate(()=>{window.desktopRequest=window.__realDR10;window.runGameJob=window.__origRunGameJob;});
     await evaluate(dir=>openGameImport(dir,{autoPick:'files'}),browsePath);
     await waitFor(()=>document.querySelector('#gm-pick-files'),'game import loaded');
     await waitFor(()=>document.querySelector('#gm-sources')?.textContent.includes('Imported demo.sfc'),'files auto-picked on open');

@@ -45,6 +45,7 @@ GET_ROUTES = {
 
 POST_ROUTES = {
     '/api/game-files/file-ops': api_library.game_file_ops,
+    '/api/game-files/import-preview': api_library.game_file_import_preview,
     '/api/game-files/sync-preview': api_library.preview_game_file_sync,
     '/api/game-files/sync-apply': api_library.apply_game_file_sync,
     '/api/games/mapping': api_games.save_mapping,

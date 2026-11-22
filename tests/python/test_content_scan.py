@@ -236,3 +236,20 @@ def test_core_status_distinguishes_local_file_from_unverified_remote_install(tmp
     for root, path in [(None, ''), ('adb://device', ''), ('/tmp', None)]:
         with pytest.raises(ValueError):
             scan.core_status(root, path)
+
+
+def test_scan_skips_app_retained_originals(library):
+    root, games, config = library
+    (games / 'Game.sfc').write_bytes(b'new-bytes')
+    retained = games / ('Game.sfc.plcn-old-' + 'ab' * 16)
+    retained.mkdir(); (retained / 'game.sfc').write_bytes(b'old-bytes')
+    staged = games / ('Work.plcn-' + 'cd' * 16)
+    staged.mkdir(); (staged / 'inner.sfc').write_bytes(b'staged')
+    # A look-alike directory that is not a retained original still scans.
+    legit = games / 'Game.sfc.plcn-old-notes'
+    legit.mkdir(); (legit / 'extra.sfc').write_bytes(b'legit')
+    names = [entry['path'] for entry in scan.preview(config)['document']['items']]
+    assert any(name.endswith('Game.sfc') and '.plcn' not in name for name in names)
+    assert not any('.plcn-old-' + 'ab' * 16 in name for name in names)
+    assert not any('.plcn-' + 'cd' * 16 in name for name in names)
+    assert any('plcn-old-notes' in name for name in names)

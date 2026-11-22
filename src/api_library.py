@@ -60,20 +60,40 @@ def game_file_directory(handler, context, query):
     ]})
 
 
+def game_file_import_preview(handler, context, payload):
+    import game_file_actions
+
+    sources, directory, remote, _ = game_file_actions.validate_add(payload)
+    reply(handler, game_file_actions.preview_import(sources, directory, remote))
+
+
 def game_file_ops(handler, context, payload):
     import game_file_actions
     from task_control import checkpoint
 
-    if payload.get('action') == 'add':
+    action = payload.get('action')
+    if action == 'add':
         sources, directory, remote, overwrite = game_file_actions.validate_add(payload)
+        decisions = game_file_actions.validate_decisions(payload, sources)
         manager = context.job_manager
         reply(handler, {'job_id': background(manager, '添加游戏文件', lambda jid: game_file_actions.apply_add(
             sources, directory, remote, overwrite,
             lambda current, total, msg: manager.update_job(jid, current, total, msg),
-            lambda: checkpoint(lambda: manager.cancelled(jid))))})
+            lambda: checkpoint(lambda: manager.cancelled(jid)), decisions))})
+        return
+    if isinstance(payload.get('paths'), list):
+        paths, argument, remote = game_file_actions.validate_ops(payload)
+        manager = context.job_manager
+        title = '删除文件' if action == 'delete' else '复制文件'
+        work = (lambda jid: game_file_actions.apply_delete_batch(
+            paths, remote, lambda current, total, msg: manager.update_job(jid, current, total, msg),
+            lambda: checkpoint(lambda: manager.cancelled(jid)))) if action == 'delete' else (
+            lambda jid: game_file_actions.apply_copy_batch(
+                paths, argument, remote, lambda current, total, msg: manager.update_job(jid, current, total, msg),
+                lambda: checkpoint(lambda: manager.cancelled(jid))))
+        reply(handler, {'job_id': background(manager, title, work)})
         return
     path, argument, remote = game_file_actions.validate_op(payload)
-    action = payload['action']
     if action == 'rename':
         reply(handler, game_file_actions.apply_rename(path, argument, remote))
         return
@@ -82,7 +102,7 @@ def game_file_ops(handler, context, payload):
     work = (lambda jid: game_file_actions.apply_delete(
         path, remote, lambda current, total, msg: manager.update_job(jid, current, total, msg),
         lambda: checkpoint(lambda: manager.cancelled(jid)))) if action == 'delete' else (
-        lambda jid: game_file_actions.apply_copy(
+        lambda jid: game_file_actions.apply_copy_single(
             path, argument, remote, lambda current, total, msg: manager.update_job(jid, current, total, msg),
             lambda: checkpoint(lambda: manager.cancelled(jid))))
     reply(handler, {'job_id': background(manager, title, work)})

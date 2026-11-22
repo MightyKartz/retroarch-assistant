@@ -215,7 +215,8 @@ def children(handle, storage, parent):
     while node:
         file = node.contents
         following = C.cast(file.next, C.c_void_p).value
-        result.append({'id': file.id, 'name': file.name.decode(), 'size': file.size, 'folder': file.type == 0})
+        result.append({'id': file.id, 'name': file.name.decode(), 'size': file.size,
+                       'modified': file.modified or None, 'folder': file.type == 0})
         lib.LIBMTP_destroy_file_t(node)
         node = C.cast(following, C.POINTER(File))
     return result
