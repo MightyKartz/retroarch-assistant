@@ -405,13 +405,7 @@ dialog :is(h2,h3)[autofocus]:focus {outline:none;}
 .game-files-row-menu .action-menu-list {max-height:60vh;overflow:auto;}
 .game-files-empty {margin:48px 16px;text-align:center;color:var(--muted);font-size:13px;}
 .game-files-status {margin:12px 0 0;}
-.game-files-detail {margin:8px 0 0;font-size:12px;border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;}
-.game-files-detail>summary {cursor:pointer;color:var(--muted);}
-.game-files-detail>summary:hover {color:var(--primary);}
-.game-files-detail-item {margin-top:8px;}
-.game-files-detail-item p {margin:4px 0;overflow-wrap:anywhere;}
-.game-files-detail-item ul {list-style:none;margin:4px 0;padding:0;max-height:180px;overflow:auto;}
-.game-files-detail-item li {padding:2px 0;overflow-wrap:anywhere;font-family:var(--mono,monospace);font-size:11px;}
+
 @media(max-width:820px){.app-shell.showing-game-files{grid-template-columns:180px minmax(0,1fr);}}
 @media(max-width:560px){
     .app-shell.showing-game-files{grid-template-columns:minmax(0,1fr);}
@@ -432,14 +426,6 @@ dialog :is(h2,h3)[autofocus]:focus {outline:none;}
 .game-files-row.game-files-drop-target {background:var(--primary-soft);}
 .game-file-delete-list {margin:0 0 16px;padding-left:20px;max-height:30vh;overflow:auto;}
 .game-file-delete-list li {margin:4px 0;overflow-wrap:anywhere;}
-.game-file-import-body {display:flex;flex-direction:column;gap:10px;max-height:50vh;overflow:auto;margin:0 0 16px;}
-.game-file-conflict {display:flex;gap:10px;align-items:flex-start;border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;}
-.game-file-conflict-text {display:flex;flex-direction:column;gap:2px;font-size:12px;color:var(--muted);min-width:0;overflow-wrap:anywhere;}
-.game-file-conflict-text strong {color:var(--text);font-size:13px;}
-.game-file-conflict-warning {color:var(--red);}
-.game-file-dup {border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;margin:0;}
-.game-file-dup legend {font-size:12px;color:var(--muted);padding:0 4px;}
-.game-file-dup-option {display:flex;gap:8px;align-items:flex-start;margin:6px 0;font-size:13px;overflow-wrap:anywhere;}
 #game-files-button,#manual-scan-button,#overview-complete-button {width:36px;padding:0;justify-content:center;}
 @media(max-width:560px){.panel-actions #game-files-button{grid-column:auto;justify-content:center;}}
 

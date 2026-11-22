@@ -12,7 +12,7 @@ function openM3uEditor(group,files){
         :files.get(group.discs[0]).disc.family.replace(/[<>:"/\\|?*\r\n]/g,'_')+'.m3u';
     m3uField('mode').value='switch';m3uField('preserve-states').checked=false;
     m3uField('status').textContent='选择光盘和顺序，再预览实际文件、列表和存档变化。原光盘文件始终保留。';
-    renderM3uDiscs();m3uField('dialog').showModal();
+    renderM3uDiscs();showModal(m3uField('dialog'));
 }
 function renderM3uDiscs(){
     const rows=m3uField('discs');rows.replaceChildren();

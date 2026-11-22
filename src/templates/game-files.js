@@ -52,7 +52,7 @@ async function openFileSyncDialog() {
     dialog.append(heading, impact, message, actions);
     document.body.append(dialog);
     dialog.addEventListener('close', () => { endWorkbenchOperation(); dialog.remove(); }, {once:true});
-    dialog.showModal();
+    showModal(dialog);
     runPreview();
 
     function list(zh, en, entries) {
@@ -147,12 +147,11 @@ function openGameFiles(opener, target = null) {
     const remote = wbElement('div', 'game-files-storages');
     const storageStatus = wbElement('p', 'game-files-muted');
     storageStatus.setAttribute('role', 'status');
-    const refresh = gmButton('重新检测存储', 'Detect storage again', loadStorages);
     const local = gmButton('电脑目录', 'Computer folder', chooseFolder);
     local.id = 'game-files-local';
     local.prepend(wbIcon('folder'));
     navigation.append(wbElement('h3', '', tr('电脑', 'Computer')), local,
-        wbElement('h3', '', tr('USB 掌机', 'USB handheld')), remote, storageStatus, refresh);
+        wbElement('h3', '', tr('USB 掌机', 'USB handheld')), remote, storageStatus);
 
     const pane = wbElement('section', 'game-files-pane');
     const toolbar = wbElement('div', 'game-files-toolbar');
@@ -186,9 +185,7 @@ function openGameFiles(opener, target = null) {
     table.append(column, empty, rows);
     const status = wbElement('p', 'game-files-status');
     status.setAttribute('role', 'status');
-    const detailBox = wbElement('details', 'game-files-detail');
-    detailBox.hidden = true;
-    pane.append(toolbar, table, status, detailBox);
+    pane.append(toolbar, table, status);
     sidebar.append(navigation);
     workspace.append(header, mobileNav, pane);
     shell.classList.add('showing-game-files');
@@ -223,7 +220,6 @@ function openGameFiles(opener, target = null) {
        sends the batch back for a fresh sample. */
     let writeVersion = 0;
     let lastReadError = 0;   // request id whose read error the status line currently shows
-    let lastOpsDetail = null;   // what renderOpsDetail currently shows, for appending notices
     let expiredNotice = 0;      // in-flight nav request id that owns a pending drop-expired notice
     let statusSummary = null;   // write summary the status line currently presents
     let sortDirection = 'asc';
@@ -493,10 +489,10 @@ function openGameFiles(opener, target = null) {
        drags the view back to the write target. While a user navigation is
        in flight it owns the next render; the refresh is replayed only when
        the landed view still shows the write target, and the write's summary
-       plus its full operation detail are restored after navigation settles. */
-    function refreshAfterWrite(directory, names = new Set(), message = '', detail = []) {
+       is restored after navigation settles. */
+    function refreshAfterWrite(directory, names = new Set(), message = '') {
         if (navInFlight) {
-            afterNavRefresh = {directory, names, message, detail, writeVersion};
+            afterNavRefresh = {directory, names, message, writeVersion};
             return Promise.resolve('deferred');
         }
         return loadDirectory(current?.path || directory, null, names);
@@ -548,7 +544,6 @@ function openGameFiles(opener, target = null) {
     }
 
     async function loadStorages() {
-        refresh.disabled = true;
         storageStatus.textContent = tr('正在检测存储…', 'Detecting storage…');
         try {
             const result = await desktopRequest('/api/game-files/storages');
@@ -566,8 +561,6 @@ function openGameFiles(opener, target = null) {
                 (result.storages.length ? '' : tr('未检测到 USB 文件传输存储。', 'No USB file transfer storage detected.'));
         } catch (error) {
             storageStatus.textContent = error.message;
-        } finally {
-            refresh.disabled = false;
         }
     }
 
@@ -606,7 +599,7 @@ function openGameFiles(opener, target = null) {
         document.body.append(dialog);
         dialog.addEventListener('close', () => dialog.remove(), {once:true});
         dialog.addEventListener('cancel', event => { if (changing) event.preventDefault(); });
-        dialog.showModal();
+        showModal(dialog);
         input.focus();
         input.setSelectionRange(0, Math.max(0, item.name.lastIndexOf('.')));
         input.onkeydown = event => { if (event.key === 'Enter' && !event.isComposing) submit(); };
@@ -647,7 +640,7 @@ function openGameFiles(opener, target = null) {
         document.body.append(dialog);
         dialog.addEventListener('cancel', event => { event.preventDefault(); requestCancel(); });
         dialog.addEventListener('close', () => dialog.remove(), {once:true});
-        dialog.showModal();
+        showModal(dialog);
         try {
             const {result} = await runGameJob('/api/game-files/file-ops', payload, job => {
                 jobId = job.id || gameManagement.job;
@@ -703,7 +696,7 @@ function openGameFiles(opener, target = null) {
         document.body.append(dialog);
         dialog.addEventListener('close', () => dialog.remove(), {once:true});
         dialog.addEventListener('cancel', event => { if (changing) event.preventDefault(); });
-        dialog.showModal();
+        showModal(dialog);
 
         async function apply() {
             if (changing) return;
@@ -718,7 +711,7 @@ function openGameFiles(opener, target = null) {
                 if (gameFilesView === view) {
                     const summary = deleteSummary(result, items);
                     const outcome = await refreshAfterWrite(directory, new Set(), summary);
-                    presentWriteResult(outcome, directory, new Set(), summary, []);
+                    presentWriteResult(outcome, directory, new Set(), summary);
                 }
             } catch (error) {
                 status.textContent = gmError(error);
@@ -759,108 +752,48 @@ function openGameFiles(opener, target = null) {
             : tr(`已复制 ${items.length} 项，切换到目标目录后粘贴。`, `Copied ${items.length} items. Paste them in the destination folder.`);
     }
 
-    /* Full written-path detail for partial results — the status line keeps
-       the short summary while this expandable block lists every confirmed
-       path, the real target, kept conflicts and the interruption reason.
-       An optional lead line carries the write summary when the status line
-       has to keep a read error visible instead. */
-    function renderOpsDetail(entries, lead = '') {
-        lastOpsDetail = {entries, lead};
-        detailBox.hidden = !entries.length && !lead;
-        detailBox.replaceChildren();
-        if (!entries.length && !lead) return;
-        detailBox.append(wbElement('summary', '', tr('查看已写入明细', 'Show written details')));
-        if (lead) detailBox.append(wbElement('p', 'game-files-muted', lead));
-        for (const entry of entries) {
-            const block = wbElement('div', 'game-files-detail-item');
-            block.append(wbElement('p', '', entry.name
-                ? `${entry.name} → ${entry.target || ''}`
-                : tr(`目标：${entry.target}`, `Target: ${entry.target}`)));
-            if (entry.conflict)
-                block.append(wbElement('p', '', tr(`已保留同名成员：${entry.conflict}`, `Kept same-named member: ${entry.conflict}`)));
-            if (entry.interrupted)
-                block.append(wbElement('p', '', tr(`中断成员：${entry.interrupted}`, `Interrupted member: ${entry.interrupted}`)));
-            if (entry.retained)
-                block.append(wbElement('p', '', tr(`原件已保留：${entry.retained}`, `Original retained: ${entry.retained}`)));
-            if (entry.error)
-                block.append(wbElement('p', 'game-files-muted', tr(`中断原因：${entry.error}`, `Interrupted: ${entry.error}`)));
-            const list = wbElement('ul');
-            for (const path of entry.written || []) list.append(wbElement('li', '', path));
-            if (list.children.length)
-                block.append(wbElement('p', 'game-files-muted', tr(`已写入 ${list.children.length} 项：`, `Written (${list.children.length}):`)), list);
-            detailBox.append(block);
-        }
-    }
-
-    function clearPasteDetail() {
-        lastOpsDetail = null;
+    function clearResultState() {
         statusSummary = null;
-        detailBox.hidden = true;
-        detailBox.replaceChildren();
     }
 
     /* The expired-batch notice must not bury a read error that is still on
-       screen: when the status line shows one, the notice joins the detail
-       block so the error and the completed write's result stay visible. */
+       screen — the status line gates every feedback source the same way. */
     const dropExpiredMessage = () => tr('放置位置已失效，请重新拖入。', 'The drop target expired. Drag the files in again.');
 
-    /* The lead merge every feedback source uses — a deduped join that keeps
-       whatever the detail block already leads with (write summary, earlier
-       notices). */
-    function detailLead(prior, addition) {
-        if (!addition) return prior || '';
-        if (!prior) return addition;
-        return prior.includes(addition) ? prior : `${prior} ${addition}`;
+    /* The single presentation entry — nav settlement, write results and the
+       drop-expiry notice all funnel their status-line updates through here.
+       `headline` claims the status line while no read error is showing; with
+       an error on screen the headline appends to it instead — a finished
+       write or an expiry notice is never silently dropped. `own` marks a
+       write summary so a later navigation landing on the write target can
+       restore it. */
+    function presentResult({headline = '', own = false, append = false}) {
+        if (!headline) return;
+        if (lastReadError || append) {
+            status.textContent += tr('；', '; ') + headline;
+            return;
+        }
+        status.textContent = headline;
+        if (own) statusSummary = headline;
     }
 
-    /* The single presentation entry for the status line plus the detail
-       block — nav settlement, write results and the drop-expiry notice all
-       funnel their status/detail updates through here. `entries`+`lead`
-       update the detail block (merged into the existing lead, or replacing
-       it wholesale with `replace`); `headline` claims the status line only
-       while no read error is showing, and `own` marks it as a write summary
-       so a later notice can preserve it as the detail lead. */
-    function presentResult({entries = null, lead = '', replace = false, headline = '', own = false}) {
-        if (entries !== null || lead) {
-            const merged = replace ? lead : detailLead(lastOpsDetail?.lead || statusSummary || '', lead);
-            renderOpsDetail(entries ?? lastOpsDetail?.entries ?? [], merged);
-        }
-        if (headline && !lastReadError) {
-            status.textContent = headline;
-            if (own) statusSummary = headline;
-        }
-    }
-
-    /* A presented write result or a visible read error keeps its place: the
-       notice joins the detail lead instead of burying either — with no prior
-       result and no error it stays a plain status message. */
     function showDropExpired() {
-        const message = dropExpiredMessage();
         if (navInFlight) expiredNotice = latestNav;   // settle with that navigation's outcome
-        const entries = lastOpsDetail?.entries || [];
-        const prior = lastOpsDetail?.lead || statusSummary || '';
-        if (!lastReadError && !entries.length && !prior) { status.textContent = message; return; }
-        presentResult({lead: message, headline: message});
+        // A write summary already on the line is kept — the notice joins it.
+        presentResult({headline: dropExpiredMessage(), append: Boolean(statusSummary)});
     }
 
-    /* Present a finished write's result using the refresh outcome: a failed
-       read stays in the status line while the summary leads the detail
-       block; a refresh that turned stale while a user navigation is in
-       flight defers to that landing like the C-03h pending restore. */
-    function presentWriteResult(outcome, directory, names, summary, detail) {
+    /* Present a finished write's result using the refresh outcome: a refresh
+       that turned stale while a user navigation is in flight defers to that
+       landing like the C-03h pending restore; a visible read error keeps the
+       line and the summary appends to it through the same gate. */
+    function presentWriteResult(outcome, directory, names, summary) {
         if (gameFilesView !== view) return;
         if (outcome === 'stale' && navInFlight) {
-            afterNavRefresh = {directory, names, message:summary, detail, writeVersion};
+            afterNavRefresh = {directory, names, message:summary, writeVersion};
             return;
         }
-        /* A stale refresh whose newer navigation already failed keeps that
-           read error in the status line — the write result moves to the
-           detail block exactly like a failed refresh. */
-        if (outcome === 'failed' || (outcome === 'stale' && lastReadError)) {
-            presentResult({entries: detail, lead: summary, replace: true});
-            return;
-        }
-        presentResult({entries: detail, headline: summary, own: true, replace: true});
+        presentResult({headline: summary, own: true});
     }
 
     async function pasteFiles() {
@@ -870,7 +803,7 @@ function openGameFiles(opener, target = null) {
         const directory = current.path;
         changing = true; writeVersion += 1;
         updateActionState();
-        clearPasteDetail();
+        clearResultState();
         status.textContent = tr('正在粘贴…', 'Pasting…');
         try {
             const result = await runOpsJob(tr('正在复制…', 'Copying…'),
@@ -881,9 +814,8 @@ function openGameFiles(opener, target = null) {
                     .filter(entry => entry.status === 'copied' || entry.status === 'partial')
                     .map(entry => entry.name);
                 const summary = pasteSummary(result, items);
-                const detail = (result?.items || []).filter(entry => entry.status === 'partial');
-                const outcome = await refreshAfterWrite(directory, new Set(names), summary, detail);
-                presentWriteResult(outcome, directory, new Set(names), summary, detail);
+                const outcome = await refreshAfterWrite(directory, new Set(names), summary);
+                presentWriteResult(outcome, directory, new Set(names), summary);
             }
         } catch (error) {
             status.textContent = gmError(error);
@@ -936,7 +868,7 @@ function openGameFiles(opener, target = null) {
         const navAppliedAtIssue = navApplied;
         directoryLoading = true;
         clearDrop();
-        clearPasteDetail();
+        clearResultState();
         status.textContent = tr('正在读取目录…', 'Reading folder…');
         try {
             const result = await desktopRequest('/api/game-files/directory?path=' + encodeURIComponent(path));
@@ -998,9 +930,8 @@ function openGameFiles(opener, target = null) {
                 afterNavRefresh = null;
                 expiredNotice = 0;
                 if (!pending) {
-                    /* A notice raised during the wait with no parked write
-                       still lands in the detail block. */
-                    presentResult({entries: [], lead: dropExpiredMessage(), replace: true});
+                    /* A notice raised during the wait lands as plain status. */
+                    presentResult({headline: dropExpiredMessage()});
                 } else {
                     const related = current.path === pending.directory
                         || current.items.some(item => item.directory && item.path === pending.directory);
@@ -1008,22 +939,24 @@ function openGameFiles(opener, target = null) {
                         : Promise.resolve('unrelated');
                     const notice = noticed ? dropExpiredMessage() : '';
                     Promise.resolve(settled).then(outcome => {
-                        /* Restore the write's result when the replayed refresh
+                        /* Restore the write's summary when the replayed refresh
                            applied — or when the landing is unrelated so nothing
                            was replayed — provided no newer navigation landed and
-                           no newer task owns the result area. A stale or failed
-                           refresh keeps the newer result/read error visible. The
-                           wait-time expiry notice joins the restored detail. */
+                           no newer task owns the status line. A stale or failed
+                           refresh keeps the newer read error visible; the
+                           wait-time expiry notice joins the restored message. */
                         if (gameFilesView !== view) return;
                         if (latestNav !== request || writeVersion !== pending.writeVersion) return;
-                        if (outcome === 'failed') {   // keep the read error; the write result stays inspectable
-                            presentResult({entries: pending.detail,
-                                lead: detailLead(pending.message, notice), replace: true});
+                        if (outcome === 'failed') {
+                            // The read error stays; the write's summary and
+                            // the expiry notice append to the same line.
+                            const text = [pending.message, notice].filter(Boolean).join(tr('；', '; '));
+                            presentResult({headline: text});
                             return;
                         }
                         if (outcome !== 'applied' && outcome !== 'unrelated') return;
-                        presentResult({entries: pending.detail, lead: notice, replace: true,
-                            headline: pending.message || '', own: Boolean(pending.message)});
+                        const text = [pending.message, notice].filter(Boolean).join(' ');
+                        presentResult({headline: text, own: Boolean(pending.message)});
                     });
                 }
             }
@@ -1041,22 +974,16 @@ function openGameFiles(opener, target = null) {
             status.textContent = tr('读取目录失败：', 'Could not read the folder: ') + error.message;
             statusSummary = null;
             lastReadError = request;
-            /* Results parked while this navigation was in flight settle
-               here: the parked write result and any drop-expired notice
-               raised during the wait join the detail block while the read
-               error stays in the status line — and neither replays on a
-               later navigation. */
+            /* Results parked while this navigation was in flight settle on
+               the same line — appended after the read error so a finished
+               write or an expiry notice is never silently dropped — then
+               cleared so nothing replays on a later navigation. */
             if (isNav) {
-                const pending = afterNavRefresh;
+                const extra = [afterNavRefresh?.message,
+                               expiredNotice === request ? dropExpiredMessage() : '']
+                    .filter(Boolean).join(tr('；', '; '));
+                if (extra) status.textContent += tr('；', '; ') + extra;
                 afterNavRefresh = null;
-                const settled = pending && pending.writeVersion === writeVersion;
-                const noticed = expiredNotice === request;
-                if (settled)
-                    presentResult({entries: pending.detail,
-                        lead: detailLead(pending.message, noticed ? dropExpiredMessage() : ''),
-                        replace: true});
-                else if (noticed)
-                    presentResult({lead: dropExpiredMessage()});
                 expiredNotice = 0;
             }
             updateActionState();
@@ -1109,7 +1036,7 @@ function openGameFiles(opener, target = null) {
             const opAt = writeVersion;
             status.textContent = tr('正在检查同名项…', 'Checking for name conflicts…');
             try {
-                preview = await desktopRequest('/api/game-files/import-preview', {sources, directory, root});
+                preview = await desktopRequest('/api/game-files/import-preview', {sources, directory, root, light: true});
             } catch (error) {
                 if (gameFilesView === view) status.textContent = gmError(error);
                 return;
@@ -1120,92 +1047,41 @@ function openGameFiles(opener, target = null) {
                 return;
             }
             if (workbenchBusy() || opAt !== writeVersion) continue;
-            const conflicts = preview.items.filter(item => item.conflict);
-            if (!conflicts.length && !preview.duplicates.length) { await submitAdd(sources, directory, null, batch); return; }
+            // Same-named sources in one drop have no Finder counterpart — the
+            // first listed source wins its name; the rest are never sent, so a
+            // replace can never park a same-batch copy as the "original".
+            // group.sources are item indices, aligned 1:1 with `sources`.
+            const losers = new Set(preview.duplicates.flatMap(group => group.sources.slice(1)));
+            const conflicts = preview.items.filter((item, index) => item.conflict && !losers.has(index));
+            const submitSources = sources.filter((source, index) => !losers.has(index));
+            if (!conflicts.length) { await submitAdd(submitSources, directory, false, batch); return; }
             status.textContent = '';
-            const outcome = await openImportDialog(preview, sources, directory, conflicts, batch, opAt);
-            if (outcome !== 'busy') return;
+            const outcome = await openOverwriteDialog(conflicts, submitSources, directory, batch, opAt, losers.size);
+            if (outcome === 'busy') continue;
+            return;
         }
     }
 
-    function openImportDialog(preview, sources, directory, conflicts, batch = null, opAt = writeVersion) {
-        const dialog = wbElement('dialog', 'desktop-confirm app-dialog game-file-import-dialog');
+    /* Finder-style overwrite prompt: one question for every same-named item —
+       cancel keeps the batch unsubmitted, skip keeps the existing content,
+       replace overwrites it with the new content outright. */
+    function openOverwriteDialog(conflicts, sources, directory, batch = null, opAt = writeVersion, trimmed = 0) {
+        const dialog = wbElement('dialog', 'desktop-confirm app-dialog game-file-overwrite-dialog');
         const heading = wbElement('h2', '', tr('处理同名项', 'Resolve name conflicts'));
-        heading.id = 'game-file-import-title';
+        heading.id = 'game-file-overwrite-title';
         heading.setAttribute('autofocus', '');
         dialog.setAttribute('aria-labelledby', heading.id);
-        const note = wbElement('p', '', tr('同名项默认跳过；勾选替换会以新内容占据目标名，原件移至保留位置并继续占用空间，完成后可查看保留路径。',
-            'Same-named items are skipped unless approved; replacing publishes the new content under the target name while the original is kept at a retained location and still uses space — its path is shown in the result.'));
-        const body = wbElement('div', 'game-file-import-body');
-        const approvals = new Map();
-        const memberGroup = new Map();
-        preview.duplicates.forEach((group, index) => group.sources.forEach(itemIndex => memberGroup.set(itemIndex, index)));
-        const chosen = new Map(preview.duplicates.map((group, index) => [index, group.sources[0]]));
-        const describe = entry => (entry.folder ? tr('文件夹', 'Folder') : tr('文件', 'File')) + ' · '
-            + formatFileSize(entry.size) + ' · ' + formatFileTime(entry.modified);
-        for (const item of conflicts) {
-            const row = wbElement('label', 'game-file-conflict');
-            const box = wbElement('input', '');
-            box.type = 'checkbox';
-            const text = wbElement('span', 'game-file-conflict-text');
-            text.append(wbElement('strong', '', item.name),
-                wbElement('span', '', tr('现有：' + describe(item.conflict), 'Existing: ' + describe(item.conflict))),
-                wbElement('span', '', tr('导入：' + describe(item), 'Incoming: ' + describe(item))));
-            if (item.conflict.folder || item.folder) {
-                text.append(wbElement('span', 'game-file-conflict-warning',
-                    tr('整项替换，原件移至保留位置。', 'Replaces the whole item; the original is moved to a retained location.')));
-            }
-            approvals.set(item.source, box);
-            row.append(box, text);
-            body.append(row);
-        }
-        preview.duplicates.forEach((group, index) => {
-            const set = wbElement('fieldset', 'game-file-dup');
-            set.append(wbElement('legend', '', tr(`「${group.name}」有 ${group.sources.length} 个同名来源，选择一个复制`,
-                `"${group.name}" has ${group.sources.length} sources; choose one to copy`)));
-            group.sources.forEach((itemIndex, option) => {
-                const item = preview.items[itemIndex];
-                const label = wbElement('label', 'game-file-dup-option');
-                const radio = wbElement('input', '');
-                radio.type = 'radio';
-                radio.name = 'game-file-dup-' + index;
-                radio.checked = !option;
-                radio.onchange = () => { if (radio.checked) { chosen.set(index, itemIndex); updateConflictAccess(); } };
-                label.append(radio, wbElement('span', '', `${item.source}（${describe(item)}）`));
-                set.append(label);
-            });
-            body.append(set);
-        });
-        function updateConflictAccess() {
-            preview.items.forEach((item, index) => {
-                const box = approvals.get(item.source);
-                const group = memberGroup.get(index);
-                if (box) box.disabled = group !== undefined && chosen.get(group) !== index;
-            });
-        }
-        updateConflictAccess();
-        const message = wbElement('p', '', '');
-        message.setAttribute('role', 'status');
+        const names = conflicts.map(item => item.name);
+        const shown = names.slice(0, 6);
+        const list = shown.join('、') + (names.length > shown.length
+            ? tr(` 和另外 ${names.length - shown.length} 项`, ` and ${names.length - shown.length} more`) : '');
+        const note = wbElement('p', '', tr(`有 ${names.length} 个同名项：${list}。跳过则保留现有内容；替换会用新内容直接覆盖同名项。`
+            + (trimmed ? `（另有 ${trimmed} 个同名来源被略过，仅使用最先一项）` : ''),
+            `${names.length} item(s) share names with the destination: ${list}. Skipping keeps the existing content; replacing overwrites the same-named items with the new content.`
+            + (trimmed ? ` (${trimmed} more same-named source(s) were dropped — only the first of each name is used.)` : '')));
         const actions = wbElement('div', 'desktop-confirm-actions');
-        actions.append(gmButton('取消', 'Cancel', () => dialog.close()));
-        if (conflicts.length > 1) {
-            actions.append(gmButton('全部替换', 'Replace all', () => {
-                approvals.forEach(box => { if (!box.disabled) box.checked = true; });
-            }));
-        }
-        actions.append(gmButton('继续复制', 'Continue', () => {
-            const decisions = {};
-            preview.items.forEach((item, index) => {
-                const group = memberGroup.get(index);
-                if (group !== undefined && chosen.get(group) !== index) {
-                    decisions[item.source] = {action:'skip'};
-                } else if (item.conflict) {
-                    decisions[item.source] = approvals.get(item.source).checked
-                        ? {action:'replace', stamp:item.conflict.stamp} : {action:'skip'};
-                } else {
-                    decisions[item.source] = {action:'copy'};
-                }
-            });
+        let finish = () => {};
+        const decide = result => () => {
             if (!batchValid(batch)) {
                 showDropExpired();
                 finish();
@@ -1219,19 +1095,25 @@ function openGameFiles(opener, target = null) {
                 dialog.close();
                 return;
             }
-            finish(submitAdd(sources, directory, decisions, batch));
+            finish(submitAdd(sources, directory, result === 'replace', batch));
             dialog.close();
-        }, false));
-        dialog.append(heading, note, body, message, actions);
+        };
+        const skip = gmButton('跳过同名项', 'Skip same-named items', decide('skip'));
+        skip.classList.add('game-file-skip');
+        actions.append(gmButton('取消', 'Cancel', () => dialog.close()), skip,
+            wbElement('button', 'btn game-file-replace', tr('替换', 'Replace')));
+        const replace = actions.lastElementChild;
+        replace.type = 'button';
+        replace.onclick = decide('replace');
+        dialog.append(heading, note, actions);
         document.body.append(dialog);
-        let finish = () => {};
         const settled = new Promise(resolve => { finish = resolve; });
         dialog.addEventListener('close', () => { dialog.remove(); finish(); }, {once:true});
-        dialog.showModal();
+        showModal(dialog);
         return settled;
     }
 
-    async function submitAdd(sources, directory, decisions = null, batch = null) {
+    async function submitAdd(sources, directory, overwrite = false, batch = null) {
         if (!directory || changing || !sources.length) return;
         if (!batchValid(batch)) {
             showDropExpired();
@@ -1240,22 +1122,19 @@ function openGameFiles(opener, target = null) {
         if (!beginWorkbenchOperation('game-file-ops')) { status.textContent = tr('请等待当前任务完成。', 'Wait for the current task.'); return; }
         changing = true; writeVersion += 1;
         updateActionState();
-        clearPasteDetail();
+        clearResultState();
         status.textContent = tr('正在复制…', 'Copying…');
         const payload = {action:'add', sources, directory, root};
-        if (decisions) payload.decisions = decisions;
+        if (overwrite) payload.overwrite = true;
         try {
             const result = await runOpsJob(tr('正在复制…', 'Copying…'), payload);
             if (gameFilesView === view) {
                 // Refresh whatever the user is looking at — a write into a
                 // subfolder must not navigate the view to the target.
                 const summary = addSummary(result);
-                const detail = [
-                    ...(result.failed || []).filter(entry => entry.written?.length || entry.conflict || entry.interrupted || entry.target),
-                    ...(result.leftovers || []).map(entry => ({name: entry.name, target: entry.path, retained: entry.reason})),
-                ];
-                const outcome = await refreshAfterWrite(directory, new Set([...result.copied, ...result.replaced]), summary, detail);
-                presentWriteResult(outcome, directory, new Set([...result.copied, ...result.replaced]), summary, detail);
+                const names = new Set([...result.copied, ...result.replaced]);
+                const outcome = await refreshAfterWrite(directory, names, summary);
+                presentWriteResult(outcome, directory, names, summary);
             }
         } catch (error) {
             status.textContent = gmError(error);
@@ -1279,9 +1158,8 @@ function openGameFiles(opener, target = null) {
                     ? tr(`无法核对目标内容，已保留：${entry.name}`, `Could not verify the target; kept: ${entry.name}`)
                     : tr(`预览后新增同名目标，已保留：${entry.name}`, `Target appeared after preview; kept: ${entry.name}`));
         }
-        if (result.failed.length) parts.push(tr('失败：', 'Failed: ') + list(result.failed.map(entry => entry.name)));
-        const recoverable = result.failed.flatMap(entry => entry.recoverable || []);
-        if (recoverable.length) parts.push(tr('可找回对象：', 'Recoverable at: ') + list(recoverable));
+        if (result.failed.length) parts.push(tr('失败：', 'Failed: ') + list(result.failed.map(entry => entry.name))
+            + (result.failed[0].error ? tr(`（${result.failed[0].error}）`, ` (${result.failed[0].error})`) : ''));
         if (result.remaining.length) parts.push(tr('未完成：', 'Not finished: ') + list(result.remaining));
         if (result.leftovers?.length) parts.push(tr('残留待核对：', 'Leftover to verify: ')
             + list(result.leftovers.map(entry => entry.reason ? entry.path + '（' + entry.reason + '）' : entry.path)));
@@ -1318,19 +1196,6 @@ function fileChangeRegistrations(result) {
     return entries;
 }
 
-function formatFileSize(value) {
-    if (value == null || Number.isNaN(value)) return workbenchText('未知', 'Unknown');
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    let size = value, unit = 0;
-    while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit += 1; }
-    return (unit ? size.toFixed(size >= 10 ? 0 : 1) : size) + ' ' + units[unit];
-}
-
-function formatFileTime(value) {
-    if (value == null) return workbenchText('未知', 'Unknown');
-    return new Date(value * 1000).toLocaleString(currentUILanguage === 'en' ? 'en-US' : 'zh-CN');
-}
-
 /* The directory a recorded drop zone resolves to, or null when the drop is no
    longer valid (stale event, page navigated, directory reloading, or the
    folder row it hovered is gone). Exported for regression tests. */
@@ -1352,4 +1217,4 @@ function gameFilesDropSource(payload) {
     gameFilesView?.dropSource?.(payload);
 }
 
-if (typeof module !== 'undefined') module.exports = {gameFilesSorted, fileChangeRegistrations, formatFileSize, formatFileTime, gameFilesDropDirectory};
+if (typeof module !== 'undefined') module.exports = {gameFilesSorted, fileChangeRegistrations, gameFilesDropDirectory};

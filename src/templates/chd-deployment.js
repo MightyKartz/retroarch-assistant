@@ -16,7 +16,7 @@ function openChdDeployment(record){
         const label=document.createElement('label');label.className='deploy-check';const input=document.createElement('input');input.type='checkbox';input.value=result.id;input.checked=true;
         label.appendChild(input);const text=document.createElement('span');text.textContent=result.source+' → '+result.output;label.appendChild(text);discs.appendChild(label);
     }
-    deployField('status').textContent='默认仅回传副本。更新引用与清理必须先完成运行报告，再核对实际变更。';deployField('dialog').showModal();
+    deployField('status').textContent='默认仅回传副本。更新引用与清理必须先完成运行报告，再核对实际变更。';showModal(deployField('dialog'));
 }
 async function closeChdDeployment(){
     if(chdDeployment.busy)return;invalidateDeployment();deployField('dialog').close();

@@ -1,5 +1,5 @@
 const test=require('node:test');const assert=require('node:assert');const fs=require('node:fs');const vm=require('node:vm');
-function runtime(){const context={module:{exports:{}},workbenchText:zh=>zh,currentUILanguage:'zh'};vm.createContext(context);vm.runInContext(fs.readFileSync('src/templates/game-files.js','utf8'),context);return context.module.exports;}
+function runtime(){const context={module:{exports:{}},workbenchText:zh=>zh,currentUILanguage:'zh',showModal(d){d.showModal();}};vm.createContext(context);vm.runInContext(fs.readFileSync('src/templates/game-files.js','utf8'),context);return context.module.exports;}
 
 test('gameFilesSorted keeps folders first in both directions',()=>{
     const {gameFilesSorted}=runtime();
@@ -45,13 +45,4 @@ test('gameFilesDropDirectory rejects stale, busy or vanished targets',()=>{
     assert.equal(gameFilesDropDirectory(zone(),current,2,false,7),null);
     assert.equal(gameFilesDropDirectory(zone(),current,2,false,null),null);
     assert.equal(gameFilesDropDirectory(zone({stamp:undefined}),current,2,false,undefined),null);
-});
-
-test('formatFileSize and formatFileTime localize unknown values',()=>{
-    const {formatFileSize,formatFileTime}=runtime();
-    assert.equal(formatFileSize(null),'未知');
-    assert.equal(formatFileSize(0),'0 B');
-    assert.equal(formatFileSize(1536),'1.5 KB');
-    assert.equal(formatFileSize(10485760),'10 MB');
-    assert.equal(formatFileTime(null),'未知');
 });

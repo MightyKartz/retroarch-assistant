@@ -101,6 +101,9 @@ def test_add_overwrite_stages_then_replaces(tmp_path, monkeypatch):
     assert (destination / 'Game' / 'b.bin').read_bytes() == b'new bin'
     assert not (destination / 'Game' / 'a.bin').exists()
     assert not (tmp_path / 'home' / 'file-trash').exists()
+    # Replace keeps no backup — nothing staged or retained survives.
+    assert result['leftovers'] == []
+    assert not list(destination.glob('*.plcn-*'))
 
 
 def test_add_reports_failure_and_remaining_and_cleans_partial(tmp_path):
@@ -180,7 +183,7 @@ def test_sync_rejects_a_stale_signature(tmp_path):
         sync.apply(str(root), changes, signature)
 
 
-def test_replace_publish_failure_preserves_original_file(tmp_path, monkeypatch):
+def test_replace_publish_failure_keeps_the_staged_copy(tmp_path, monkeypatch):
     monkeypatch.setenv('RETROARCH_ASSISTANT_HOME', str(tmp_path / 'home'))
     destination = tmp_path / 'Roms'
     destination.mkdir()
@@ -189,24 +192,19 @@ def test_replace_publish_failure_preserves_original_file(tmp_path, monkeypatch):
     source = tmp_path / 'incoming'
     source.mkdir()
     (source / 'game.sfc').write_bytes(b'new version')
-    real_exclusive = ops._rename_exclusive
-    calls = []
-
-    def fail_publish(staged, target):
-        calls.append(staged)
-        if len(calls) == 1:
-            raise OSError('publish failed')
-        return real_exclusive(staged, target)
-    monkeypatch.setattr(ops, '_rename_exclusive', fail_publish)
+    monkeypatch.setattr(ops, '_rename_exclusive',
+                        lambda *a: (_ for _ in ()).throw(OSError('publish failed')))
     result = ops.apply_add([str(source / 'game.sfc')], str(destination), False, overwrite=True)
-    monkeypatch.setattr(ops, '_rename_exclusive', real_exclusive)
     assert result['failed'] and 'publish failed' in result['failed'][0]['error']
     assert result['replaced'] == []
-    assert original.read_bytes() == b'old version'
-    assert not list(destination.glob('*.plcn-*'))
+    # The original is already deleted; the staged copy survives for salvage.
+    assert not original.exists()
+    staged = next(destination.glob('game.sfc.plcn-*'))
+    assert staged.read_bytes() == b'new version'
+    assert result['leftovers'][0]['path'] == str(staged)
 
 
-def test_replace_folder_publish_failure_rolls_back_original(tmp_path, monkeypatch):
+def test_replace_folder_publish_failure_keeps_the_staged_copy(tmp_path, monkeypatch):
     monkeypatch.setenv('RETROARCH_ASSISTANT_HOME', str(tmp_path / 'home'))
     destination = tmp_path / 'Roms'
     destination.mkdir()
@@ -217,23 +215,17 @@ def test_replace_folder_publish_failure_rolls_back_original(tmp_path, monkeypatc
     source.mkdir()
     (source / 'Game').mkdir()
     (source / 'Game' / 'b.bin').write_bytes(b'new bin')
-    real_exclusive = ops._rename_exclusive
-    calls = []
-
-    def fail_publish(staged, target):
-        calls.append(staged)
-        if len(calls) == 1:
-            raise OSError('device refused rename')
-        return real_exclusive(staged, target)
-    monkeypatch.setattr(ops, '_rename_exclusive', fail_publish)
+    monkeypatch.setattr(ops, '_rename_exclusive',
+                        lambda *a: (_ for _ in ()).throw(OSError('device refused rename')))
     result = ops.apply_add([str(source / 'Game')], str(destination), False, overwrite=True)
-    monkeypatch.setattr(ops, '_rename_exclusive', real_exclusive)
     assert result['failed'] and 'refused' in result['failed'][0]['error']
-    assert (folder / 'a.bin').read_bytes() == b'old bin'
-    assert not list(destination.glob('*.plcn-*'))
+    assert not folder.exists()
+    staged = next(destination.glob('Game.plcn-*'))
+    assert (staged / 'b.bin').read_bytes() == b'new bin'
+    assert result['leftovers'][0]['path'] == str(staged)
 
 
-def test_replace_failure_reports_recoverable_paths_when_rollback_fails(tmp_path, monkeypatch):
+def test_replace_failure_reports_the_staged_path_when_publish_fails(tmp_path, monkeypatch):
     monkeypatch.setenv('RETROARCH_ASSISTANT_HOME', str(tmp_path / 'home'))
     destination = tmp_path / 'Roms'
     destination.mkdir()
@@ -244,18 +236,16 @@ def test_replace_failure_reports_recoverable_paths_when_rollback_fails(tmp_path,
     source.mkdir()
     (source / 'Game').mkdir()
     (source / 'Game' / 'b.bin').write_bytes(b'new bin')
-    # Both the forward publish and the restore claim refuse their target.
     monkeypatch.setattr(ops, '_rename_exclusive',
                         lambda *a: (_ for _ in ()).throw(OSError('publish failed')))
     result = ops.apply_add([str(source / 'Game')], str(destination), False, overwrite=True)
-    entry = result['failed'][0]
-    assert '.plcn-old-' in entry['error'] and '.plcn-' in entry['error']
-    # Both the parked original and the staged copy remain readable on disk.
-    assert len(entry['recoverable']) == 2
-    parked_dir = next(Path(path) for path in entry['recoverable'] if '.plcn-old-' in path)
-    staged_dir = next(Path(path) for path in entry['recoverable'] if '.plcn-old-' not in path)
-    assert (parked_dir / 'a.bin').read_bytes() == b'old bin'
-    assert (staged_dir / 'b.bin').read_bytes() == b'new bin'
+    assert result['failed']
+    # The staged copy is the reported survivor — its real path lands in leftovers.
+    staged = next(destination.glob('Game.plcn-*'))
+    assert result['leftovers'][0]['path'] == str(staged)
+    assert '.plcn-old-' not in staged.name
+    assert (staged / 'b.bin').read_bytes() == b'new bin'
+    assert not folder.exists()
 
 
 def test_local_delete_and_copy_respect_cancellation(tmp_path):
@@ -348,7 +338,7 @@ def test_cancelled_batch_progress_reports_processed_count():
     assert jobs.jobs[early]['status'] == 'cancelled' and jobs.jobs[early]['progress'] == 0 and jobs.jobs[early]['total'] == 3
 
 
-def test_local_replace_reports_parked_leftover_when_cleanup_partially_fails(tmp_path, monkeypatch):
+def test_local_replace_keeps_staged_when_target_delete_fails(tmp_path, monkeypatch):
     source = tmp_path / 'new' / 'Game'
     source.mkdir(parents=True)
     (source / 'a.txt').write_text('new-a')
@@ -358,20 +348,14 @@ def test_local_replace_reports_parked_leftover_when_cleanup_partially_fails(tmp_
     target.mkdir(parents=True)
     (target / 'old1.txt').write_text('x')
     (target / 'old2.txt').write_text('y')
-    real_unlink = Path.unlink
-    calls = [0]
-    def flaky(path, *args, **kwargs):
-        if '.plcn-old-' in str(path):
-            calls[0] += 1
-            if calls[0] > 1:
-                raise OSError('io error')
-        return real_unlink(path, *args, **kwargs)
-    monkeypatch.setattr(Path, 'unlink', flaky)
+    # The original refuses deletion — the staged copy must not clobber it.
+    monkeypatch.setattr(ops.shutil, 'rmtree', lambda *args, **kw: None)
     result = ops.apply_add([str(source)], str(destination), False, overwrite=True)
-    parked = [entry for entry in destination.iterdir() if '.plcn-old-' in entry.name and not entry.name.endswith('.plcn-lock')]
-    assert parked, 'parked original should remain on disk'
-    assert [item['path'] for item in result['leftovers']] == [str(parked[0])]
-    assert (target / 'a.txt').read_text() == 'new-a' and (target / 'b.txt').read_text() == 'new-b'
+    assert result['failed'] and not result['replaced']
+    assert (target / 'old1.txt').read_text() == 'x'
+    staged = next(destination.glob('Game.plcn-*'))
+    assert result['leftovers'][0]['path'] == str(staged)
+    assert (staged / 'a.txt').read_text() == 'new-a'
 
 
 def test_copy_paste_uses_host_platform_source_name(tmp_path):
@@ -385,7 +369,7 @@ def test_copy_paste_uses_host_platform_source_name(tmp_path):
     assert not list(source.glob('*副本*'))
 
 
-def test_mtp_replace_moves_original_aside_and_keeps_it(tmp_path, monkeypatch):
+def test_mtp_replace_deletes_original_and_publishes_staged(tmp_path, monkeypatch):
     import mtp_runtime as mtp
     root_uri = mtp.uri('dev', 0x10001, 'Roms')
     files = {mtp.join(root_uri, 'game.sfc'): b'old version'}
@@ -410,14 +394,12 @@ def test_mtp_replace_moves_original_aside_and_keeps_it(tmp_path, monkeypatch):
     result = ops.apply_add([str(source)], root_uri, True, overwrite=True)
     assert result['replaced'] == ['game.sfc']
     assert files[mtp.join(root_uri, 'game.sfc')] == b'new version'
-    # The parked original is retained and reported — device writes cannot be
-    # excluded during a delete window, so it is never removed by name.
-    parked = [entry['path'] for entry in result['leftovers'] if '.plcn-old-' in entry['path']]
-    assert len(parked) == 1
-    assert files[parked[0]] == b'old version'
+    # Replace keeps no backup — the original is deleted outright.
+    assert result['leftovers'] == []
+    assert not any('.plcn-' in path for path in files)
 
 
-def test_mtp_replace_reports_leftover_when_cleanup_fails(tmp_path, monkeypatch):
+def test_mtp_replace_keeps_staged_when_original_delete_fails(tmp_path, monkeypatch):
     import mtp_runtime as mtp
     root_uri = mtp.uri('dev', 0x10001, 'Roms')
     files = {mtp.join(root_uri, 'game.sfc'): b'old version'}
@@ -432,10 +414,13 @@ def test_mtp_replace_reports_leftover_when_cleanup_fails(tmp_path, monkeypatch):
     source = tmp_path / 'game.sfc'
     source.write_bytes(b'new version')
     result = ops.apply_add([str(source)], root_uri, True, overwrite=True)
-    assert result['replaced'] == ['game.sfc']
-    assert result['leftovers'] and '.plcn-old-' in result['leftovers'][0]['path']
-    assert files[mtp.join(root_uri, 'game.sfc')] == b'new version'
-    assert files[result['leftovers'][0]['path']] == b'old version'
+    # The undeletable original keeps its name; the staged copy survives and reports itself.
+    assert result['replaced'] == [] and result['failed']
+    assert files[mtp.join(root_uri, 'game.sfc')] == b'old version'
+    staged = next(path for path in files if '.plcn-' in path)
+    assert '.plcn-old-' not in staged
+    assert result['leftovers'][0]['path'] == staged
+    assert files[staged] == b'new version'
 
 
 def test_mtp_copy_decodes_percent_encoded_source_name(tmp_path, monkeypatch):
@@ -801,9 +786,8 @@ def test_add_decisions_skip_replace_and_keep_unapproved_targets(tmp_path, monkey
     assert (dest / 'swap.sfc').read_bytes() == b'new swap.sfc'
     assert (dest / 'changed.sfc').read_bytes() == b'v2'
     assert (dest / 'appeared.sfc').read_bytes() == b'surprise'
-    # The reviewed original stays parked; only staged residue is forbidden.
-    residue = [p for p in dest.glob('*.plcn-*') if '.plcn-old-' not in p.name]
-    assert not residue
+    # Replace keeps no backup — nothing staged or retained survives.
+    assert not list(dest.glob('*.plcn-*'))
 
 
 def test_add_dup_sources_copy_only_the_chosen_one(tmp_path):
@@ -1198,11 +1182,17 @@ def _mtp_tree_stubs(monkeypatch, members):
                 member_state[name] = member_state.pop(member)
         return new_path
 
+    def delete(path):
+        store.pop(path, None)
+        for member in list(member_state):
+            if path == mtp.join(target_uri, member):
+                member_state.pop(member, None)
+
     monkeypatch.setattr(mtp, 'stat_file', stat)
     monkeypatch.setattr(mtp, 'listing', listing)
     monkeypatch.setattr(mtp, 'upload_file', lambda target, source, expected, stage, cancelled=lambda: None: None)
     monkeypatch.setattr(mtp, 'rename_object', rename)
-    monkeypatch.setattr(mtp, 'delete_object', lambda path: None)
+    monkeypatch.setattr(mtp, 'delete_object', delete)
     _mtp_session_stub(monkeypatch)
     return root_uri, target_uri, member_state
 
@@ -1428,11 +1418,19 @@ def _mtp_nested_replace_stubs(monkeypatch, bin_id=11, bin_modified=100):
                 listing_map[new_path + uri[len(path):]] = listing_map.pop(uri)
         return new_path
 
+    def delete(path):
+        for uri in list(stat_map):
+            if uri == path or uri.startswith(path + '/'):
+                stat_map.pop(uri, None)
+        for uri in list(listing_map):
+            if uri == path or uri.startswith(path + '/'):
+                listing_map.pop(uri, None)
+
     monkeypatch.setattr(mtp, 'stat_file', lambda path: stat_map.get(path))
     monkeypatch.setattr(mtp, 'listing', lambda path: listing_map.get(path, []))
     monkeypatch.setattr(mtp, 'upload_file', lambda *args, **kwargs: None)
     monkeypatch.setattr(mtp, 'rename_object', rename)
-    monkeypatch.setattr(mtp, 'delete_object', lambda path: None)
+    monkeypatch.setattr(mtp, 'delete_object', delete)
     _mtp_session_stub(monkeypatch)
     return root_uri, stat_map, listing_map
 
@@ -1590,7 +1588,7 @@ def test_stamp_recheck_detects_a_member_edited_during_itself(tmp_path, monkeypat
     assert not list(dest.glob('*.plcn-*'))
 
 
-def test_replace_keeps_a_foreign_target_appearing_after_parking(tmp_path, monkeypatch):
+def test_replace_keeps_a_foreign_target_appearing_after_delete(tmp_path, monkeypatch):
     """Closure B: a new object claiming the freed name is never renamed over."""
     dest = tmp_path / 'dest'
     dest.mkdir()
@@ -1606,7 +1604,7 @@ def test_replace_keeps_a_foreign_target_appearing_after_parking(tmp_path, monkey
     def hook(staged, target):
         calls.append(staged)
         if len(calls) == 1:
-            # The freed name gets a foreign claimant before staging lands.
+            # A foreign claimant takes the freed name before staging lands.
             Path(target).write_bytes(b'outside')
         return real_exclusive(staged, target)
 
@@ -1615,16 +1613,15 @@ def test_replace_keeps_a_foreign_target_appearing_after_parking(tmp_path, monkey
     stamp = ops.preview_import([source], str(dest), False)['items'][0]['conflict']['stamp']
     result = ops.apply_add([source], str(dest), False, decisions={source: {'action': 'replace', 'stamp': stamp}})
     assert original.read_bytes() == b'outside'
-    assert result['replaced'] == []
-    failure = result['failed'][0]
-    assert failure['recoverable'] and any('.plcn-old-' in path for path in failure['recoverable'])
-    # The parked original and the staged copy remain for manual salvage.
-    parked = [path for path in failure['recoverable'] if '.plcn-old-' in path][0]
-    assert Path(parked).read_bytes() == b'old'
+    assert result['replaced'] == [] and result['failed']
+    # The staged copy survives alongside the untouched foreign claimant.
+    staged = next(dest.glob('game.sfc.plcn-*'))
+    assert staged.read_bytes() == b'new'
+    assert result['leftovers'][0]['path'] == str(staged)
 
 
-def test_replace_rolls_back_when_publish_fails_without_a_claimant(tmp_path, monkeypatch):
-    """Closure B: a plain publish failure restores the parked original."""
+def test_replace_keeps_staged_when_publish_fails_without_a_claimant(tmp_path, monkeypatch):
+    """A publish failure after the original's delete keeps the staged copy."""
     dest = tmp_path / 'dest'
     dest.mkdir()
     original = dest / 'game.sfc'
@@ -1645,9 +1642,12 @@ def test_replace_rolls_back_when_publish_fails_without_a_claimant(tmp_path, monk
     source = str(src / 'game.sfc')
     stamp = ops.preview_import([source], str(dest), False)['items'][0]['conflict']['stamp']
     result = ops.apply_add([source], str(dest), False, decisions={source: {'action': 'replace', 'stamp': stamp}})
-    assert original.read_bytes() == b'old'
+    # The original is already deleted; the staged copy survives for salvage.
+    assert not original.exists()
     assert result['replaced'] == [] and result['failed']
-    assert not list(dest.glob('*.plcn-*'))
+    staged = next(dest.glob('game.sfc.plcn-*'))
+    assert staged.read_bytes() == b'new'
+    assert result['leftovers'][0]['path'] == str(staged)
 
 
 def test_cleanup_after_identity_check_never_unlinks_a_claimant(tmp_path, monkeypatch):
@@ -1727,38 +1727,6 @@ def test_stamp_recheck_detects_equal_size_same_mtime_edit(tmp_path, monkeypatch)
     assert not list(dest.glob('*.plcn-*'))
 
 
-def test_parked_original_edited_before_cleanup_is_kept(tmp_path, monkeypatch):
-    """B-01: an original edited after parking is not authorized for delete."""
-    dest = tmp_path / 'dest'
-    (dest / 'Game').mkdir(parents=True)
-    (dest / 'Game' / 'a.bin').write_bytes(b'aaaa')
-    src = tmp_path / 'src'
-    (src / 'Game').mkdir(parents=True)
-    (src / 'Game' / 'b.bin').write_bytes(b'new')
-    source = str(src / 'Game')
-    stamp = ops.preview_import([source], str(dest), False)['items'][0]['conflict']['stamp']
-    real_exclusive = ops._rename_exclusive
-    calls = []
-
-    def hook(staged, target):
-        calls.append(staged)
-        if len(calls) == 1:
-            # The parked original is edited before cleanup can prove it.
-            parked = next(dest.glob('Game.plcn-old-*'))
-            (parked / 'a.bin').write_bytes(b'zzzz')
-        return real_exclusive(staged, target)
-
-    monkeypatch.setattr(ops, '_rename_exclusive', hook)
-    result = ops.apply_add([source], str(dest), False, decisions={source: {'action': 'replace', 'stamp': stamp}})
-    # The new tree published, and the edited original is reported where it sits.
-    assert result['replaced'] == ['Game']
-    assert (dest / 'Game' / 'b.bin').read_bytes() == b'new'
-    assert result['leftovers']
-    parked = next(dest.glob('Game.plcn-old-*'))
-    assert result['leftovers'][0]['path'] == str(parked)
-    assert (parked / 'a.bin').read_bytes() == b'zzzz'
-
-
 def test_dir_publish_abort_reports_written_and_interrupted_member(tmp_path, monkeypatch):
     """A-02: a plain member failure keeps and reports the published prefix."""
     dest = tmp_path / 'dest'
@@ -1827,25 +1795,52 @@ def test_nested_dir_written_paths_list_actual_files(tmp_path, monkeypatch):
     assert not (dest / 'Pack' / 'c.bin').exists()
 
 
-def test_open_handle_write_after_publish_keeps_parked_bytes(tmp_path):
-    """B-01: a handle held across the park still writes through — the parked
-    original keeps those bytes and is reported where it actually sits."""
+def test_replace_deletes_original_and_publishes_staged_dir(tmp_path):
+    """The replace path deletes the original tree and publishes the staged one."""
     dest = tmp_path / 'dest'
     (dest / 'Game').mkdir(parents=True)
-    old = dest / 'Game' / 'old.bin'
-    old.write_bytes(b'old')
+    (dest / 'Game' / 'old.bin').write_bytes(b'old')
     src = tmp_path / 'src'
     (src / 'Game').mkdir(parents=True)
     (src / 'Game' / 'b.bin').write_bytes(b'new')
     source = str(src / 'Game')
     stamp = ops.preview_import([source], str(dest), False)['items'][0]['conflict']['stamp']
-    fd = os.open(old, os.O_RDWR)
     result = ops.apply_add([source], str(dest), False, decisions={source: {'action': 'replace', 'stamp': stamp}})
-    os.write(fd, b'live')
-    os.fsync(fd)
-    os.close(fd)
-    parked = next(dest.glob('Game.plcn-old-*'))
-    assert (parked / 'old.bin').read_bytes() == b'live'
     assert result['replaced'] == ['Game']
-    assert any(entry['path'] == str(parked) for entry in result['leftovers'])
     assert (dest / 'Game' / 'b.bin').read_bytes() == b'new'
+    assert not (dest / 'Game' / 'old.bin').exists()
+    # Replace keeps no backup — nothing staged or retained survives.
+    assert result['leftovers'] == []
+    assert not list(dest.glob('*.plcn-*'))
+
+
+def test_preview_import_light_reports_conflict_without_fingerprint(tmp_path):
+    src = tmp_path / 'src'
+    dest = tmp_path / 'dest'
+    src.mkdir(); dest.mkdir()
+    (src / 'game.sfc').write_bytes(b'new')
+    (dest / 'game.sfc').write_bytes(b'old')
+    conflict = ops.preview_import([str(src / 'game.sfc')], str(dest), False,
+                                  light=True)['items'][0]['conflict']
+    assert conflict is not None and conflict['stamp'] is None
+
+
+def test_game_file_directory_hides_dotfiles_but_keeps_technical(tmp_path, monkeypatch):
+    import api_library
+    browse = tmp_path / 'browse'
+    browse.mkdir()
+    (browse / 'game.sfc').write_bytes(b'x')
+    (browse / 'Sub').mkdir()
+    # A non-dot name still lists even when it looks technical (e.g. a staged
+    # copy stranded by an interrupted write) — only dot-prefixed entries hide.
+    technical = browse / ('game.sfc.plcn-' + 'ab' * 16)
+    technical.mkdir()
+    (browse / '.hidden').mkdir()
+    (browse / '.DS_Store').write_bytes(b'x')
+    (browse / '._sidecar').write_bytes(b'x')
+    seen = {}
+    monkeypatch.setattr(api_library, 'reply',
+                        lambda handler, data, status=200: seen.update(data))
+    api_library.game_file_directory(None, None, {'path': [str(browse)]})
+    names = [item['name'] for item in seen['items']]
+    assert names == [technical.name, 'Sub', 'game.sfc']

@@ -17,7 +17,7 @@ async function openContentScan(targetRoot = '') {
     document.getElementById('content-core-transfer').disabled = true;
     document.getElementById('content-core-result').textContent = '';
     const dialog = document.getElementById('content-scan-dialog');
-    if (!dialog.open) dialog.showModal();
+    if (!dialog.open) showModal(dialog);
     contentField('fields').disabled = true;
     contentField('start').disabled = true;
     try {

@@ -37,6 +37,10 @@ find . -name '._*' -delete   # 含 .git 与 dist/
 - `hdiutil create -srcfolder` 会从 srcfolder 所在卷推断 DMG 文件系统：staging 在
   ExFAT 上时会走 `newfs_exfat` 并以 "bad volume name" 拒绝带空格的卷名
   （报 "操作不被允许"）。手动补建加 `-fs HFS+`，或把 staging 放到 APFS。
+- 拷贝已签名的 .app 一律用 `ditto`，不要用 `cp -R`：cp 读取 ExFAT 源时会让
+  `._*` 在 dist 里重新生成并原样拷进目标，破坏签名（verify 报 "a sealed
+  resource is missing"）；ditto 把 AppleDouble 合并为 xattr，目标不产生 `._*`。
+  DMG staging 同理。
 - self-check：`RETROARCH_ASSISTANT_HOME=$(mktemp -d)` 运行
   `Contents/MacOS/RetroArchAssistant --self-check`，结果写到该目录的
   `self-check.json`（stdout 无输出，需要 `RETROARCH_ASSISTANT_HOME`，否则静默退出码 1）。

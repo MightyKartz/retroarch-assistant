@@ -25,7 +25,7 @@ function renderLibraryRead() {
     for (const [id,zh,en,icon] of [['library-read-retry','重新读取','Retry','refresh'],['library-read-switch','切换设备','Switch device','device-gamepad']]) wbIconButton(document.getElementById(id), icon, workbenchText(zh,en));
     document.getElementById('library-read-banner-retry').textContent = workbenchText('重试','Retry');
     if (active && libraryRead.blocking) {
-        if (!dialog.open) {libraryRead.focus = document.activeElement; dialog.showModal();}
+        if (!dialog.open) {libraryRead.focus = document.activeElement; showModal(dialog);}
         if (failed) document.getElementById('library-read-retry').focus();
     } else if (dialog.open) {
         dialog.close();
@@ -63,6 +63,26 @@ function wbSystemIcon(system) {
 function wbElement(tag, className, text) {
     const el = document.createElement(tag); el.className = className;
     if (text !== undefined) el.textContent = text; return el;
+}
+/* <dialog>.showModal() focuses the first control when no [autofocus] element
+   claims it — a prompt selects no button by default, so focus lands on the
+   dialog's title instead (the same convention the static dialogs follow via
+   tabindex="-1" autofocus on their heading). Callers that want a specific
+   control focused do so right after. */
+function showModal(dialog) {
+    dialog.showModal();
+    const active = document.activeElement;
+    if (!active || !dialog.contains(active)
+        || !active.matches('button, input, select, textarea, a[href]')) return;
+    const labelled = dialog.getAttribute('aria-labelledby');
+    const heading = (labelled && document.getElementById(labelled))
+        || dialog.querySelector('h1, h2, h3');
+    if (heading) {
+        heading.tabIndex = -1;
+        heading.focus();
+    } else {
+        active.blur();
+    }
 }
 function wbSystemName(system) {
     const names = {
@@ -347,7 +367,7 @@ async function openAutoScan(){
     document.getElementById('auto-scan-results').replaceChildren();document.getElementById('auto-scan-apply').hidden=true;
     document.getElementById('auto-scan-status').textContent=uiText('选择需要扫描的存储。扫描只读取目录，确认后才生成游戏列表。');
     const roots=document.getElementById('auto-scan-roots');roots.replaceChildren();document.getElementById('auto-scan-start').disabled=true;
-    document.getElementById('auto-scan-dialog').showModal();
+    showModal(document.getElementById('auto-scan-dialog'));
     try{
         const data=await desktopRequest('/api/library/sources');if(generation!==autoScanState.generation)return;
         const serial=root.startsWith('mtp://')?root.split('/')[2]:null;

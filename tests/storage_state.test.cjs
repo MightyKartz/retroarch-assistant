@@ -3,6 +3,7 @@ function harness(){
     const fields=new Map(),events=[];
     const field=id=>{if(!fields.has(id))fields.set(id,{value:'',disabled:false,hidden:false,textContent:'',replaceChildren(){},querySelectorAll(){return [];}});return fields.get(id);};
     const c={console,Set,JSON,document:{getElementById:field},workbench:{operation:null},
+        showModal(d){d.showModal();},
         beginWorkbenchOperation(op){if(c.workbench.operation)return false;c.workbench.operation=op;return true;},endWorkbenchOperation(){c.workbench.operation=null;},
         desktopRequest:async()=>({job_id:'active'}),EventSource:class{constructor(){events.push(this);}close(){this.closed=true;}}};
     vm.createContext(c);vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/templates/storage.js'),'utf8')+'\nglobalThis.store=storageTask',c);

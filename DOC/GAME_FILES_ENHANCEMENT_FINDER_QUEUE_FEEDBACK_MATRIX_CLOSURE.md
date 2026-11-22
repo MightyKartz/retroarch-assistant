@@ -36,3 +36,18 @@
 - `git diff --check`：无空白问题。提交前已清理 `._*` AppleDouble 与仓库根 `tmp*` 残留目录。
 
 平台验收项（Windows 跨目录粘贴、MTP 真机特殊文件名）未在本环境覆盖，仍待真机核对。
+
+## 后续更新：访达式同名提示、隐藏过滤与替换语义（main 未提交改动）
+
+在 C-03n 关闭之后，文件页 UX 与替换实现按访达语义进一步简化：
+
+- **同名处理**：逐项勾选 + stamp 指纹回传的导入对话框替换为单一提示「取消 / 跳过同名项 / 替换」。替换发送 `overwrite: true`；跳过与取消不提交任何覆盖意图。预览请求带 `light: true`，不再计算目标指纹（`preview_import(..., light)`），MTP 目录树上更快。`decisions`/stamp 机制服务端保留（含测试），当前客户端不发送。
+- **替换不保留原件**：`_publish_replace` 改为先删原目标、再以 `_rename_exclusive` 排他发布暂存件——不再把原件驻留 `.plcn-old-*`，用户无需事后手动清理。删除后若目标名被外来者抢占（或 MTP 上原件删除失败仍占位），暂存件不会被改名覆盖他人内容，而是留在 `*.plcn-*` 暂存路径并经 `result.leftovers` 报告；本地 claim-write 失败时目标占位与暂存件两条路径一并报告。`PublishFailed` 与回滚/驻留分支随之移除，`test_game_file_ops.py` 中全部驻留语义用例改写为「原件已删 + 暂存件存活报告」。
+- **同批同名来源**：预览按目标名大小写归组的 `duplicates` 不再弹窗选择；取列表中首个来源为其名提交，其余来源不发送（按项索引剔除，`conflicts` 同样只保留将提交的项，名单不重名）；对话框在有剔除项时补注被略过的来源数量。
+- **隐藏文件**：`/api/game-files/directory` 过滤 `.` 开头项（`.DS_Store`、`._*`、隐藏目录）。选择器经原生对话框进入隐藏目录不受影响。
+- **反馈收敛为单行状态栏**：结果详情块（`game-files-detail`）及其 DOM/CSS 全部移除；写入摘要、残留路径、失效通知都落在 `.game-files-status` 一行。读取错误保留该行时，后续摘要与失效提示**追加**在错误之后（`presentResult` 的 `lastReadError`/`append` 分支），不静默丢弃也不覆盖错误；四格矩阵与 C-03j/k/l/m 冒烟断言同步改为状态栏断言。
+- **对话框无默认选中**：`showModal()` 后 WebKit 会自动聚焦首个按钮，现统一在 `showModal` 后把焦点从对话框控件上移走（`game-files.js` 的模块级 `showModal` 助手与 `desktop.js` 共享确认框同步处理）；重命名对话框仍显式 `input.focus()`。
+- **侧栏**：「重新检测存储」按钮移除；打开视图时仍自动检测，`storageStatus` 的检测中/错误提示保留。
+- **对话框标识**：类名/标题 id 更名 `game-file-overwrite-dialog` / `game-file-overwrite-title`，smoke 选择器同步；「跳过同名项」「替换」挂 `game-file-skip` / `game-file-replace` 便于测试定位。
+
+回归：`pytest` 全量（含替换断言 `overwrite:true`、无驻留件、暂存存活报告、light 预览、隐藏过滤用例）；`check_ui_js` 与全部 node 单测通过。

@@ -600,12 +600,12 @@ async function main() {
     // A stale callback must not consume the newer zone nor trigger a preview.
     await evaluate(()=>gameFilesExternalDrop(['/nope-a'],__stamps.a));
     assert.equal(await evaluate(()=>document.querySelector('.game-files-table').classList.contains('game-files-drop')),true,'stale callback leaves the newer zone');
-    assert.equal(await evaluate(()=>Boolean(document.querySelector('.game-file-import-dialog'))),false,'stale callback opens no preview');
+    assert.equal(await evaluate(()=>Boolean(document.querySelector('.game-file-overwrite-dialog'))),false,'stale callback opens no preview');
     // The second drop's own callback consumes its zone and previews its source.
     await evaluate(()=>gameFilesExternalDrop([__dropDir+'/Subfolder'],__stamps.b));
-    await waitFor(()=>Boolean(document.querySelector('.game-file-import-dialog')),'fresh callback opens exactly one preview');
-    await evaluate(()=>document.querySelector('.game-file-import-dialog .btn-muted')?.click());
-    await waitFor(()=>!document.querySelector('.game-file-import-dialog'),'import dialog closed');
+    await waitFor(()=>Boolean(document.querySelector('.game-file-overwrite-dialog')),'fresh callback opens exactly one preview');
+    await evaluate(()=>document.querySelector('.game-file-overwrite-dialog .btn-muted')?.click());
+    await waitFor(()=>!document.querySelector('.game-file-overwrite-dialog'),'import dialog closed');
     // GF-03-R2(3): a partial copy exposes every written path, not just four.
     await evaluate(()=>{[...document.querySelectorAll('.game-files-check')][0].click();});
     await click('.game-files-toolbar button[aria-label="Copy"]');
@@ -617,12 +617,11 @@ async function main() {
         window.runGameJob=(route,payload,onProgress)=>Promise.resolve({id:'x',result:window.__partial});
     });
     await click('.game-files-toolbar button[aria-label="Paste"]');
-    await waitFor(()=>!document.querySelector('.game-files-detail')?.hidden,'written detail box shown');
-    await evaluate(()=>document.querySelector('.game-files-detail').open=true);
-    assert.equal(await evaluate(()=>document.querySelectorAll('.game-files-detail li').length),5,'all five written paths listed');
-    assert.equal(await evaluate(()=>[...document.querySelectorAll('.game-files-detail li')].map(li=>li.textContent).join().includes('m5.sfc')),true,'fifth path reachable');
-    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail').textContent.includes('Target/Pack')),true,'detail names the real target');
-    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail').textContent.includes('传输中断')),true,'detail names the interruption');
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.match(/部分完成|Partially/),'partial summary shown');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('m1.sfc')),true,'written paths listed in the summary');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('等 5 项')),true,'written count shown');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('Target/Pack')),true,'summary names the real target');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('传输中断')),true,'summary names the interruption');
     // The cancelled variant keeps the detail and marks the summary cancelled.
     await evaluate(()=>{
         const error=Object.assign(new Error('cancelled'),{cancelled:true,
@@ -633,7 +632,7 @@ async function main() {
     });
     await click('.game-files-toolbar button[aria-label="Paste"]');
     await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('已取消'),'cancelled summary shown');
-    assert.equal(await evaluate(()=>document.querySelectorAll('.game-files-detail li').length),2,'cancelled detail lists only confirmed writes');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('m2.sfc')),true,'cancelled summary lists confirmed writes');
     // Closure A: an add failure exposes the written range and the kept member.
     await evaluate(()=>{
         window.runGameJob=()=>Promise.resolve({id:'x',result:{copied:[],replaced:[],skipped:[],kept:[],
@@ -648,11 +647,10 @@ async function main() {
         Object.defineProperty(drop,'dataTransfer',{value:{files:[{name:'Subfolder'}]}});
         t.dispatchEvent(drop);
         gameFilesExternalDrop([dir+'/Subfolder'],333);},browsePath);
-    await waitFor(()=>Boolean(document.querySelector('.game-file-import-dialog')),'add-failure preview opened');
-    await evaluate(()=>[...document.querySelectorAll('.game-file-import-dialog .desktop-confirm-actions .btn')].pop().click());
-    await waitFor(()=>!document.querySelector('.game-files-detail')?.hidden,'add failure detail shown');
-    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail').textContent.includes('Subfolder/z.bin')),true,'kept member named in detail');
-    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail li')?.textContent.includes('/browse/Subfolder/a.bin')),true,'written path listed for add failure');
+    await waitFor(()=>Boolean(document.querySelector('.game-file-overwrite-dialog')),'add-failure preview opened');
+    await evaluate(()=>document.querySelector('.game-file-overwrite-dialog .game-file-skip')?.click());
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('Subfolder'),'add failure names the item');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('同名成员冲突')),true,'add failure names the conflict');
     await evaluate(()=>{window.runGameJob=window.__origRunGameJob;});
     // GF-05-FINAL: a nonce-bound source only feeds the drop carrying that nonce.
     // A foreign push arrived moments earlier is never borrowed.
@@ -669,10 +667,10 @@ async function main() {
         t.dispatchEvent(drop);
         window.__dropDir=dir;
         gameFilesDropSource({nonce:'own-nonce',paths:[dir+'/Subfolder']});},browsePath);
-    await waitFor(()=>Boolean(document.querySelector('.game-file-import-dialog')),'nonce-bound source opens its own preview');
-    assert.equal(await evaluate(()=>document.querySelector('.game-file-import-dialog').textContent.includes('Subfolder')),true,'preview is for this drop’s source, not the foreign record');
-    await evaluate(()=>document.querySelector('.game-file-import-dialog .btn-muted')?.click());
-    await waitFor(()=>!document.querySelector('.game-file-import-dialog'),'nonce preview closed');
+    await waitFor(()=>Boolean(document.querySelector('.game-file-overwrite-dialog')),'nonce-bound source opens its own preview');
+    assert.equal(await evaluate(()=>document.querySelector('.game-file-overwrite-dialog').textContent.includes('Subfolder')),true,'preview is for this drop’s source, not the foreign record');
+    await evaluate(()=>document.querySelector('.game-file-overwrite-dialog .btn-muted')?.click());
+    await waitFor(()=>!document.querySelector('.game-file-overwrite-dialog'),'nonce preview closed');
     // Source-first order: a pushed source waits for its own drop to arrive.
     await evaluate(dir=>{
         gameFilesDropSource({nonce:'early-nonce',paths:[dir+'/Subfolder']});
@@ -685,9 +683,9 @@ async function main() {
             getData:()=>'',
             types:['Files','org.plcn.dropid.early-nonce']}});
         t.dispatchEvent(drop);},browsePath);
-    await waitFor(()=>Boolean(document.querySelector('.game-file-import-dialog')),'types-list nonce also binds the source');
-    await evaluate(()=>document.querySelector('.game-file-import-dialog .btn-muted')?.click());
-    await waitFor(()=>!document.querySelector('.game-file-import-dialog'),'types-list nonce preview closed');
+    await waitFor(()=>Boolean(document.querySelector('.game-file-overwrite-dialog')),'types-list nonce also binds the source');
+    await evaluate(()=>document.querySelector('.game-file-overwrite-dialog .btn-muted')?.click());
+    await waitFor(()=>!document.querySelector('.game-file-overwrite-dialog'),'types-list nonce preview closed');
     // C-03: drop A lands, drop B lands (overwriting the zone), then sources
     // arrive in reverse — each must still feed its own drop exactly once.
     await evaluate(dir=>{
@@ -703,17 +701,17 @@ async function main() {
         fire('nonce-a',661); fire('nonce-b',662);
         window.__dropDir=dir;
         gameFilesDropSource({nonce:'nonce-b',paths:[dir+'/Subfolder']});},browsePath);
-    await waitFor(()=>Boolean(document.querySelector('.game-file-import-dialog')),'reversed first callback opens its own preview');
-    await evaluate(()=>document.querySelector('.game-file-import-dialog .btn-muted')?.click());
-    await waitFor(()=>!document.querySelector('.game-file-import-dialog'),'first reversed preview closed');
+    await waitFor(()=>Boolean(document.querySelector('.game-file-overwrite-dialog')),'reversed first callback opens its own preview');
+    await evaluate(()=>document.querySelector('.game-file-overwrite-dialog .btn-muted')?.click());
+    await waitFor(()=>!document.querySelector('.game-file-overwrite-dialog'),'first reversed preview closed');
     await evaluate(dir=>gameFilesDropSource({nonce:'nonce-a',paths:[dir+'/Subfolder']}),browsePath);
-    await waitFor(()=>Boolean(document.querySelector('.game-file-import-dialog')),'earlier drop’s pending zone still consumes its own source');
-    await evaluate(()=>document.querySelector('.game-file-import-dialog .btn-muted')?.click());
-    await waitFor(()=>!document.querySelector('.game-file-import-dialog'),'second reversed preview closed');
+    await waitFor(()=>Boolean(document.querySelector('.game-file-overwrite-dialog')),'earlier drop’s pending zone still consumes its own source');
+    await evaluate(()=>document.querySelector('.game-file-overwrite-dialog .btn-muted')?.click());
+    await waitFor(()=>!document.querySelector('.game-file-overwrite-dialog'),'second reversed preview closed');
     // A repeat callback for the consumed nonce opens no further preview.
     await evaluate(dir=>gameFilesDropSource({nonce:'nonce-a',paths:[dir+'/Subfolder']}),browsePath);
     await new Promise(resolve=>setTimeout(resolve,150));
-    assert.equal(await evaluate(()=>Boolean(document.querySelector('.game-file-import-dialog'))),false,'consumed nonce opens no extra preview');
+    assert.equal(await evaluate(()=>Boolean(document.querySelector('.game-file-overwrite-dialog'))),false,'consumed nonce opens no extra preview');
     // C-03(2): two nonce-bound batches in flight at once each write exactly
     // once — the second waits for the first write to finish instead of being
     // silently swallowed by the busy flag.
@@ -892,10 +890,10 @@ async function main() {
     await new Promise(resolve=>setTimeout(resolve,250));
     fs.writeFileSync(path.join(browsePath,'Clash.sfc'),'pasted-original-bytes');
     await evaluate(()=>window.__pasteDone());
-    await waitFor(()=>Boolean(document.querySelector('.game-file-import-dialog')),
+    await waitFor(()=>Boolean(document.querySelector('.game-file-overwrite-dialog')),
         'resumed batch re-checks conflicts against the pasted file');
-    await evaluate(()=>document.querySelector('.game-file-import-dialog .btn-muted')?.click());
-    await waitFor(()=>!document.querySelector('.game-file-import-dialog'),'conflict dialog closed');
+    await evaluate(()=>document.querySelector('.game-file-overwrite-dialog .btn-muted')?.click());
+    await waitFor(()=>!document.querySelector('.game-file-overwrite-dialog'),'conflict dialog closed');
     assert.equal(await evaluate(()=>window.__calls.filter(c=>c.payload.action==='add').length),0,'cancelled batch issues no write');
     assert.equal(fs.readFileSync(path.join(browsePath,'Clash.sfc'),'utf8'),'pasted-original-bytes','pasted bytes kept');
     fs.unlinkSync(path.join(browsePath,'Clash.sfc'));
@@ -1075,11 +1073,11 @@ async function main() {
     await waitFor(()=>window.__pvCalls.length===2,'landing re-sampled after the stale response');
     const resampled=await evaluate(()=>window.__pvSamples[1]);
     assert.equal(resampled.items.some(i=>i.conflict),true,'fresh sample reports the pasted same-name item');
-    await waitFor(()=>Boolean(document.querySelector('.game-file-import-dialog')),
+    await waitFor(()=>Boolean(document.querySelector('.game-file-overwrite-dialog')),
         'stale preview discarded — fresh sample asks about the pasted same-name file');
     assert.equal(await evaluate(()=>window.__addCalls.length),0,'no import submission before the user decides');
-    await evaluate(()=>document.querySelector('.game-file-import-dialog .btn-muted')?.click());
-    await waitFor(()=>!document.querySelector('.game-file-import-dialog'),'conflict cancelled');
+    await evaluate(()=>document.querySelector('.game-file-overwrite-dialog .btn-muted')?.click());
+    await waitFor(()=>!document.querySelector('.game-file-overwrite-dialog'),'conflict cancelled');
     assert.equal(await evaluate(()=>window.__addCalls.length),0,'cancelled — still no write');
     assert.equal(fs.readFileSync(path.join(browsePath,'Clash.sfc'),'utf8'),'pasted-original','pasted bytes kept after cancel');
     fs.unlinkSync(path.join(browsePath,'Clash.sfc'));
@@ -1113,27 +1111,43 @@ async function main() {
     await waitFor(base=>window.__pvCalls.length===base+2,'replace-branch landing re-sampled',pvBase);
     const resample2=await evaluate(i=>window.__pvSamples[i],pvBase+1);
     assert.equal(resample2.items.some(i=>i.conflict),true,'replace-branch fresh sample sees Clash2');
-    await waitFor(()=>Boolean(document.querySelector('.game-file-import-dialog')),'replace conflict offered');
+    await waitFor(()=>Boolean(document.querySelector('.game-file-overwrite-dialog')),'replace conflict offered');
     assert.equal(await evaluate(()=>window.__addCalls.length),0,'still no write at dialog');
-    await evaluate(()=>{
-        const box=document.querySelector('.game-file-import-dialog .game-file-conflict input');
-        if(box)box.checked=true;
-        [...document.querySelectorAll('.game-file-import-dialog .btn')]
-            .find(b=>!b.className.includes('btn-muted'))?.click();});
+    await evaluate(()=>document.querySelector('.game-file-overwrite-dialog .game-file-replace')?.click());
     for(let i=0;i<200&&(!fs.existsSync(path.join(browsePath,'Clash2.sfc'))
         ||fs.readFileSync(path.join(browsePath,'Clash2.sfc'),'utf8')!=='drop-replace-bytes');i++)
         await new Promise(r=>setTimeout(r,50));
     assert.equal(await evaluate(()=>window.__addCalls.length),1,'approved replace submits exactly once');
+    assert.equal(await evaluate(()=>window.__addCalls[0].overwrite===true),true,'replace carries the overwrite flag');
     assert.equal(fs.readFileSync(path.join(browsePath,'Clash2.sfc'),'utf8'),'drop-replace-bytes','target holds the dropped bytes');
-    const retained=fs.readdirSync(browsePath).find(n=>n.startsWith('Clash2.sfc.plcn-old-'));
-    assert.equal(Boolean(retained),true,'original retained under a kept path');
-    const keptPath=fs.statSync(path.join(browsePath,retained)).isDirectory()
-        ? path.join(browsePath,retained,'Clash2.sfc') : path.join(browsePath,retained);
-    assert.equal(fs.readFileSync(keptPath,'utf8'),'paste-keep-bytes','retained original keeps the pasted bytes');
-    await waitFor(()=>document.querySelector('.game-files-detail')?.textContent.includes('.plcn-old-'),'retained path reported in details');
+    assert.equal(fs.readdirSync(browsePath).some(n=>n.startsWith('Clash2.sfc.plcn-')),false,'replace keeps no retained or staged copy');
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.match(/Replaced|已替换/),'replace summary shown');
     for(const name of fs.readdirSync(browsePath)) if(name.startsWith('Clash2.sfc')) fs.rmSync(path.join(browsePath,name),{recursive:true,force:true});
+    // Finder-style skip: the same prompt, user picks skip — the write runs
+    // once without overwrite and the existing target is untouched.
+    fs.writeFileSync(path.join(extC,'Clash3.sfc'),'drop-skip-bytes');
+    fs.writeFileSync(path.join(browsePath,'Clash3.sfc'),'target-kept-bytes');
+    const skipBase=await evaluate(()=>window.__addCalls.length);
+    await evaluate(c=>{
+        const t=document.querySelector('.game-files-table');
+        t.dispatchEvent(new Event('dragover',{bubbles:true}));
+        const drop=new Event('drop',{bubbles:true});
+        Object.defineProperty(drop,'timeStamp',{value:1303});
+        Object.defineProperty(drop,'dataTransfer',{value:{
+            files:[{name:'x'}],getData:tt=>tt==='org.plcn.dropid'?'skip-n':'',types:['Files']}});
+        t.dispatchEvent(drop);
+        gameFilesDropSource({nonce:'skip-n',paths:[c+'/Clash3.sfc']});
+    },extC);
+    await waitFor(()=>Boolean(document.querySelector('.game-file-overwrite-dialog')),'skip conflict offered');
+    await evaluate(()=>document.querySelector('.game-file-overwrite-dialog .game-file-skip')?.click());
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.match(/Skipped|已跳过/),'skip result shown');
+    assert.equal(await evaluate(()=>window.__addCalls.length),skipBase+1,'skip still submits the batch once');
+    assert.equal(await evaluate(()=>window.__addCalls.at(-1).overwrite===undefined),true,'skip carries no overwrite flag');
+    assert.equal(fs.readFileSync(path.join(browsePath,'Clash3.sfc'),'utf8'),'target-kept-bytes','skipped target kept its bytes');
+    assert.equal(fs.readdirSync(browsePath).some(n=>n.startsWith('Clash3.sfc.plcn-old-')),false,'no retained original after skip');
+    for(const name of fs.readdirSync(browsePath)) if(name.startsWith('Clash3.sfc')) fs.rmSync(path.join(browsePath,name),{recursive:true,force:true});
     // C-03g: landing on the write target replays the refresh — the write's
-    // summary and its full operation detail survive together.
+    // summary survives on the status line.
     fs.mkdirSync(path.join(browsePath,'DetailA'),{recursive:true});
     fs.writeFileSync(path.join(extC,'BatchA.txt'),'detail-drop');
     await evaluate(()=>gameFilesView.refresh());
@@ -1155,7 +1169,7 @@ async function main() {
             return new Promise(r=>{window.__gDone=()=>{e.finished=true;r({id:'x',result:{
                 copied:['BatchA.txt'],replaced:['a.sfc'],skipped:[],failed:[],remaining:[],kept:[],
                 leftovers:['/ret/p1','/ret/p2','/ret/p3','/ret/p4','/ret/p5']
-                    .map((p,i)=>({name:'n'+(i+1)+'.sfc',path:p,reason:'原件已保留，核对后可手动删除'})),
+                    .map((p,i)=>({name:'n'+(i+1)+'.sfc',path:p,reason:'写入中断，路径待核对'})),
                 written:[]}});};});};
         const row=[...document.querySelectorAll('.game-files-row')]
             .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/DetailA'));
@@ -1172,15 +1186,17 @@ async function main() {
         .find(r=>r.dataset.folder==='true'&&r.dataset.path.endsWith('/DetailA'))?.querySelector('.btn')?.click();});
     await waitFor(()=>Boolean(window.__aReady),'DetailA navigation held');
     await evaluate(()=>window.__gDone());   // write ends while the nav is in flight
-    await waitFor(()=>document.querySelectorAll('.game-files-detail .game-files-detail-item').length===5,
-        'ops detail rendered at write end');
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('BatchA.txt'),
+        'write summary shown at write end');
     await evaluate(()=>window.__aReady());  // nav response lands
     await waitFor(()=>document.querySelector('.game-files-location [aria-current]')?.textContent==='DetailA',
         'view landed on DetailA');
-    await waitFor(()=>document.querySelectorAll('.game-files-detail .game-files-detail-item').length===5,
-        'detail survives the replayed refresh');
-    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail')?.textContent.includes('/ret/p5')),true,
-        'fifth retained path reachable from the result');
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('BatchA.txt'),
+        'summary survives the replayed refresh');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('/ret/p1')),true,
+        'leftover path named in the summary');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('等 5 项')),true,
+        'leftover count shown');
     assert.equal(await evaluate(()=>window.__calls.filter(c=>c.payload.action==='add').length),1,'import wrote exactly once');
     await evaluate(()=>{window.desktopRequest=window.__realDR4; window.runGameJob=window.__origRunGameJob;});
     // Back to the parent folder for the replayed-refresh scenarios.
@@ -1249,7 +1265,7 @@ async function main() {
         window.runGameJob=(route,payload)=>{const e={payload,finished:false};window.__calls.push(e);
             return new Promise(r=>{window.__gDone=()=>{e.finished=true;r({id:'x',result:{
                 copied:['ReplayDrop.bin'],replaced:[],skipped:[],failed:[],remaining:[],kept:[],
-                leftovers:[{name:'h1.sfc',path:'/h-ret/p1',reason:'原件已保留'},{name:'h2.sfc',path:'/h-ret/p2',reason:'原件已保留'}],
+                leftovers:[{name:'h1.sfc',path:'/h-ret/p1',reason:'写入中断，路径待核对'},{name:'h2.sfc',path:'/h-ret/p2',reason:'写入中断，路径待核对'}],
                 written:[]}});};});};
         const t=document.querySelector('.game-files-table');
         t.dispatchEvent(new Event('dragover',{bubbles:true}));
@@ -1263,14 +1279,14 @@ async function main() {
     await waitFor(()=>window.__calls?.length===1,'replay import submitted');
     await evaluate(()=>window.__gDone());
     await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('Copied'),'new import result shown');
-    await waitFor(()=>document.querySelector('.game-files-detail')?.textContent.includes('/h-ret/p2'),'import detail rendered');
+    await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('/h-ret/p2'),'leftover path named in the status');
     // Now the stale replayed refresh returns — nothing may be restored.
     await evaluate(()=>window.__rfReady());
     await new Promise(resolve=>setTimeout(resolve,400));
     assert.equal(await evaluate(()=>document.querySelector('.game-files-location [aria-current]')?.textContent),'ReplayB','still inside ReplayB');
     assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('Copied')),true,'new import summary kept');
     assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('Pasted')),false,'stale paste summary not restored');
-    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail')?.textContent.includes('/h-ret/p2')),true,'import detail kept');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('/h-ret/p2')),true,'import summary kept');
     assert.equal(await evaluate(()=>window.__foCalls.filter(a=>a==='copy').length),1,'paste submitted once');
     assert.equal(await evaluate(()=>window.__calls.filter(c=>c.payload.action==='add').length),1,'import submitted once');
     // C-03h read error: a still-valid replayed refresh that fails keeps the
@@ -1306,11 +1322,11 @@ async function main() {
     await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('disk gone'),'read error surfaced');
     await new Promise(resolve=>setTimeout(resolve,400));
     assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('disk gone')),true,'read error not overwritten');
-    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('Pasted')),false,'old task summary not restored over the error');
+    assert.equal(await evaluate(()=>/Pasted|已粘贴/.test(document.querySelector('.game-files-status').textContent)),true,'write summary appended to the read error');
     await evaluate(()=>{window.desktopRequest=window.__realDR6; window.runGameJob=window.__origRunGameJob;});
     // C-03j: when the refresh right after a finished write fails, the read
-    // error stays in the status line and the write result leads the detail
-    // block — for import, paste and delete alike.
+    // error stays in the status line and the write result is appended to it —
+    // for import, paste and delete alike.
     fs.mkdirSync(path.join(browsePath,'WriteA'),{recursive:true});
     fs.mkdirSync(path.join(browsePath,'WriteB'),{recursive:true});
     fs.mkdirSync(path.join(browsePath,'WriteC'),{recursive:true});
@@ -1361,10 +1377,8 @@ async function main() {
         'import-fail read error surfaced');
     assert.equal(fs.readFileSync(path.join(browsePath,'WriteA','WriteDrop.bin'),'utf8'),'write-drop-bytes',
         'imported bytes landed on disk');
-    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('Copied')),false,
-        'summary did not overwrite the read error');
-    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail')?.textContent.includes('Copied')),true,
-        'import summary still inspectable in the detail block');
+    assert.equal(await evaluate(()=>/Copied|已复制/.test(document.querySelector('.game-files-status').textContent)),true,
+        'import summary appended to the read error');
     assert.equal(await evaluate(()=>window.__foCalls.filter(a=>a==='add').length),1,'import submitted once');
     // Paste: fake job returns a partial result; refresh fails — written
     // paths stay inspectable next to the error.
@@ -1390,10 +1404,10 @@ async function main() {
     });
     await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('disk gone'),
         'paste-fail read error surfaced');
-    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail')?.textContent.includes('WritePack/p1.bin')),true,
-        'partial written paths inspectable next to the error');
-    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('Pasted')),false,
-        'paste summary did not overwrite the error');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('WritePack/p1.bin')),true,
+        'partial written paths named in the summary');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.match(/Pasted|已粘贴/)!==null),true,
+        'paste summary appended to the error');
     assert.equal(await evaluate(()=>window.__calls.length),1,'paste submitted once');
     // Delete: real file-ops removes the row; refresh fails — error stays.
     await evaluate(()=>{window.__failReads=false;window.runGameJob=window.__origRunGameJob;});
@@ -1415,8 +1429,8 @@ async function main() {
     await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('disk gone'),
         'delete-fail read error surfaced');
     assert.equal(fs.existsSync(path.join(browsePath,'WriteC','Gone.bin')),false,'file actually deleted');
-    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail')?.textContent.length>0),true,
-        'delete result inspectable in the detail block');
+    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('Gone.bin')),true,
+        'delete result appended to the read error');
     assert.equal(await evaluate(()=>window.__foCalls.filter(a=>a==='delete').length),1,'delete submitted once');
     // Recovery: reads work again — navigate back; only reads, no re-writes.
     await evaluate(()=>{window.__failReads=false;window.__foCalls=[];});
@@ -1499,7 +1513,7 @@ async function main() {
         await enterDir(dir);
         await waitFor(f1=>[...document.querySelectorAll('.game-files-row')]
             .some(r=>r.dataset.path?.endsWith('/'+f1)),dir+' batch file listed after recovery',file1);
-        assert.equal(await evaluate(()=>/expired|失效/.test(document.querySelector('.game-files-detail')?.textContent||'')),false,
+        assert.equal(await evaluate(()=>/expired|失效/.test(document.querySelector('.game-files-status').textContent)),false,
             dir+' no settled notice replayed on recovery');
         assert.equal(await evaluate(()=>window.__foCalls.length),1,dir+' recovery issued no extra writes');
     };
@@ -1518,10 +1532,8 @@ async function main() {
     await new Promise(resolve=>setTimeout(resolve,400));
     assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('folder B unreadable')),true,
         'nav read error survives the stale refresh');
-    assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('Copied')),false,
-        'stale write summary did not overwrite the error');
-    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail')?.textContent.includes('Copied')),true,
-        'write result inspectable beside the error');
+    assert.equal(await evaluate(()=>/Copied|已复制/.test(document.querySelector('.game-files-status').textContent)),true,
+        'write summary appended to the error');
     assert.equal(fs.readFileSync(path.join(browsePath,'NavK','KDrop.bin'),'utf8'),'k-drop-bytes','K bytes on disk');
     assert.equal(await evaluate(()=>window.__foCalls.filter(a=>a==='add').length),1,'still one write');
     // Order 2: stale refresh returns while the nav is still waiting, then
@@ -1544,8 +1556,8 @@ async function main() {
         'LSub read error shown');
     assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('folder B unreadable')),true,
         'nav error kept after parked result settled');
-    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail')?.textContent.includes('Copied')),true,
-        'parked write result settled into details');
+    assert.equal(await evaluate(()=>/Copied|已复制/.test(document.querySelector('.game-files-status').textContent)),true,
+        'parked write result appended to the error');
     assert.equal(fs.readFileSync(path.join(browsePath,'NavL','LDrop.bin'),'utf8'),'l-drop-bytes','L bytes on disk');
     assert.equal(await evaluate(()=>window.__foCalls.filter(a=>a==='add').length),2,'one write per order');
     // A later successful navigation must not replay the already-settled result.
@@ -1554,7 +1566,7 @@ async function main() {
     await waitFor(()=>[...document.querySelectorAll('.game-files-row')]
         .some(r=>r.dataset.path?.endsWith('/NavL')),'parent listing after fail');
     await new Promise(resolve=>setTimeout(resolve,300));
-    assert.equal(await evaluate(()=>document.querySelector('.game-files-detail')?.textContent||''),'',
+    assert.equal(await evaluate(()=>/Copied|已复制|expired|失效/.test(document.querySelector('.game-files-status').textContent)),false,
         'settled result did not replay on the next navigation');
     assert.equal(await evaluate(()=>window.__foCalls.length),2,'no repeated writes');
     // C-03l: a second matched batch expires after the nav failure — its
@@ -1575,20 +1587,17 @@ async function main() {
     await waitFor(()=>document.querySelector('.game-files-status').textContent.includes('folder B unreadable'),
         'MSub read error shown first');
     await evaluate(()=>window.__refReady());   // stale refresh returns; the queue then dequeues batch 2
-    await waitFor(()=>{const t=document.querySelector('.game-files-detail')?.textContent||'';
-        return /expired|失效/.test(t);},'expired notice reached the detail block');
+    await waitFor(()=>/expired|失效/.test(document.querySelector('.game-files-status').textContent),
+        'expired notice appended to the read error');
     assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('folder B unreadable')),true,
         'read error survives the expired batch notice');
-    assert.equal(await evaluate(()=>/expired|失效/.test(document.querySelector('.game-files-status').textContent)),false,
-        'expired notice did not overwrite the error');
-    assert.equal(await evaluate(()=>{const t=document.querySelector('.game-files-detail')?.textContent||'';
-        return t.includes('Copied')&&/expired|失效/.test(t);}),true,
-        'first result and expired feedback both in the detail block');
+    assert.equal(await evaluate(()=>/Copied|已复制/.test(document.querySelector('.game-files-status').textContent)),true,
+        'first batch result kept in the line');
     await assertBatchOnce('NavM','MDrop1.bin','m-drop1-bytes','MDrop2.bin');
     await recoverCheck('NavM','MDrop1.bin');
     // C-03m: same two-batch setup but the stale refresh returns while the
     // navigation is still waiting — batch 2 expires during the wait, then
-    // the nav fails; its notice must survive into the detail block.
+    // the nav fails; its notice must survive on the status line.
     fs.mkdirSync(path.join(browsePath,'NavN','NSub'),{recursive:true});
     fs.writeFileSync(path.join(extC,'NDrop1.bin'),'n-drop1-bytes');
     fs.writeFileSync(path.join(extC,'NDrop2.bin'),'n-drop2-bytes');
@@ -1615,9 +1624,9 @@ async function main() {
     await new Promise(resolve=>setTimeout(resolve,300));
     assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('folder B unreadable')),true,
         'nav error kept after the wait-time expiry');
-    assert.equal(await evaluate(()=>{const t=document.querySelector('.game-files-detail')?.textContent||'';
-        return t.includes('Copied')&&/expired|失效/.test(t);}),true,
-        'first result and expired feedback both kept in the detail block');
+    assert.equal(await evaluate(()=>{const t=document.querySelector('.game-files-status').textContent;
+        return /Copied|已复制/.test(t)&&/expired|失效/.test(t);}),true,
+        'first result and expired feedback both kept in the line');
     await assertBatchOnce('NavN','NDrop1.bin','n-drop1-bytes','NDrop2.bin');
     await recoverCheck('NavN','NDrop1.bin');
     // C-03n cell 1 — navigation SUCCEEDS, stale refresh settles first: the
@@ -1646,8 +1655,8 @@ async function main() {
     await evaluate(()=>window.__navReady());   // then the navigation lands
     await waitFor(()=>document.querySelector('.game-files-location [aria-current]')?.textContent==='PSub',
         'P landed in the new directory');
-    await waitFor(()=>/expired|失效/.test(document.querySelector('.game-files-detail')?.textContent||''),
-        'P expired feedback kept in the detail block');
+    await waitFor(()=>/expired|失效/.test(document.querySelector('.game-files-status').textContent),
+        'P expired feedback kept in the status line');
     assert.equal(await evaluate(()=>document.querySelector('.game-files-status').textContent.includes('Copied')),true,
         'P first batch summary restored after the landing');
     await assertBatchOnce('NavP','PDrop1.bin','p-drop1-bytes','PDrop2.bin');
@@ -1678,8 +1687,8 @@ async function main() {
     await evaluate(()=>window.__refReady());   // stale refresh — write result lands, batch 2 then expires
     await waitFor(()=>/expired|失效/.test(document.querySelector('.game-files-status').textContent),
         'Q second batch reported expired');
-    await waitFor(()=>{const t=document.querySelector('.game-files-detail')?.textContent||'';
-        return t.includes('Copied')&&/expired|失效/.test(t);},'Q both feedbacks kept in the detail block');
+    await waitFor(()=>{const t=document.querySelector('.game-files-status').textContent;
+        return /Copied|已复制/.test(t)&&/expired|失效/.test(t);},'Q both feedbacks kept in the status line');
     await assertBatchOnce('NavQ','QDrop1.bin','q-drop1-bytes','QDrop2.bin');
     await recoverCheck('NavQ','QDrop1.bin');
     await evaluate(()=>{window.desktopRequest=window.__realDR10;window.runGameJob=window.__origRunGameJob;});

@@ -56,7 +56,8 @@ def game_file_directory(handler, context, query):
     reply(handler, {'path': path, 'parent': parent, 'breadcrumbs': breadcrumbs, 'items': [
         {'name': entry['name'], 'directory': entry['folder'],
          'path': scan.join(path, entry['name'])}
-        for entry in entries
+        # Finder-style browsing skips dotfiles (._*/.DS_Store/hidden dirs).
+        for entry in entries if not entry['name'].startswith('.')
     ]})
 
 
@@ -64,7 +65,8 @@ def game_file_import_preview(handler, context, payload):
     import game_file_actions
 
     sources, directory, remote, _ = game_file_actions.validate_add(payload)
-    reply(handler, game_file_actions.preview_import(sources, directory, remote))
+    reply(handler, game_file_actions.preview_import(sources, directory, remote,
+                                                    light=payload.get('light') is True))
 
 
 def game_file_ops(handler, context, payload):

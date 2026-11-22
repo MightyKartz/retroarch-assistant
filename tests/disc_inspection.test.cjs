@@ -12,6 +12,7 @@ function harness() {
         return elements.get(id);
     };
     const c={AbortController,URLSearchParams,workbench:{operation:null},document:{getElementById:field},
+        showModal(d){d.showModal();},
         gameLibraryInput:()=>[selected,'Sega - Saturn'],workbenchText:zh=>zh,
         beginWorkbenchOperation(op){c.workbench.operation=op;},endWorkbenchOperation(){c.workbench.operation=null;},
         fetch:(url,options)=>new Promise(resolve=>pending.push({url,options,resolve})),
