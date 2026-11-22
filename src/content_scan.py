@@ -14,6 +14,14 @@ from safe_io import atomic_write_bytes, atomic_write_json, file_lock
 from task_control import checkpoint
 from system_resources import is_system_resource
 
+# Retained originals (".plcn-old-<hex>") and mid-operation staging dirs
+# (".plcn-<hex>") are app-generated — a recursive scan must not surface them
+# as new games. The 32-hex suffix matches only our own retention naming.
+_RETAINED_NAME = re.compile(r'\.plcn-(?:old-)?[0-9a-f]{32}$')
+
+def _app_retained(name):
+    return bool(_RETAINED_NAME.search(name))
+
 # Defaults are product recommendations, not hardware performance guarantees.
 SYSTEMS = {
     'Nintendo - Nintendo Entertainment System': ('nestopia', 'Nestopia UE', 'nes fds unf unif zip 7z'),
@@ -191,6 +199,8 @@ def preview(config, progress=lambda *args: None, cancel_check=None):
         checkpoint(cancel_check)
         progress(0, 0, '扫描目录：' + (relative or directory))
         for entry in folders(directory):
+            if _app_retained(entry['name']):
+                continue
             path = join(directory, entry['name'])
             rel = posixpath.join(relative, entry['name'])
             if entry['folder']:
