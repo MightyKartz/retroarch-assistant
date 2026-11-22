@@ -30,7 +30,13 @@ find . -name '._*' -delete   # 含 .git 与 dist/
 - venv 必须建在 APFS（`~/.venvs/plcn-build`，Python 3.13 + PyInstaller +
   pywebview）；ExFAT 上建 venv 会因 `._` 文件失败。
 - PyInstaller 打包后 bundle 内的 `._*` 会让 codesign 失败，需先
-  `find dist -name '._*' -delete` 再按 `package_desktop.py` 中的命令手动 ad-hoc 重签。
+  `find dist -name '._*' -delete` 再按 `package_desktop.py` 中的命令手动 ad-hoc 重签
+  （`codesign -s - --force --all-architectures --timestamp
+  --entitlements packaging/macos-entitlements.plist --deep "dist/RetroArch Assistant.app"`），
+  然后 `--skip-build` 重跑脚本完成 verify + self-check。
+- `hdiutil create -srcfolder` 会从 srcfolder 所在卷推断 DMG 文件系统：staging 在
+  ExFAT 上时会走 `newfs_exfat` 并以 "bad volume name" 拒绝带空格的卷名
+  （报 "操作不被允许"）。手动补建加 `-fs HFS+`，或把 staging 放到 APFS。
 - self-check：`RETROARCH_ASSISTANT_HOME=$(mktemp -d)` 运行
   `Contents/MacOS/RetroArchAssistant --self-check`，结果写到该目录的
   `self-check.json`（stdout 无输出，需要 `RETROARCH_ASSISTANT_HOME`，否则静默退出码 1）。
