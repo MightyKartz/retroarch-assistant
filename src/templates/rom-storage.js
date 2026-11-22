@@ -10,7 +10,7 @@ function openRomStorage(){
     if(workbench.operation)return;
     invalidateRomStorage();closeRomPicker();romField('settings').open=true;romField('source').value='';romField('target').value='';
     romField('status').textContent='选择源目录和主机平铺目标；分析不会移动游戏。ZIP 仅生成电脑副本。';
-    romField('dialog').showModal();
+    showModal(romField('dialog'));
 }
 function closeRomStorage(){if(romStorage.busy)return;invalidateRomStorage();closeRomPicker();romField('dialog').close();}
 async function pickRomWorkspace(){

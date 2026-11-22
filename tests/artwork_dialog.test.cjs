@@ -14,6 +14,7 @@ function harness(request) {
     const input = ['test.lpl', 'GBA', 'images'];
     const selectedRepairs = [{enabled:true}, {enabled:true}];
     const context = {document: {getElementById: get, createElement: () => get('created')}, setTimeout,
+        showModal: dialog => dialog.showModal(),
         workbenchText: (zh, en) => en, wbIconButton(button, icon, label) {button.title=label;button.setAttribute('aria-label',label);}, gameLibraryInput: () => input,
         gameLibrary: {key: JSON.stringify(input), data: {items: [item]}},
         loadGameLibrary: async () => {context.reloadedLibrary = true;},

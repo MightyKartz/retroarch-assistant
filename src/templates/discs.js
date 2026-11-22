@@ -16,7 +16,7 @@ async function openDiscInspection() {
     document.getElementById('disc-inspection-summary').textContent = workbenchText('正在检查当前目录内的列表及 M3U/CUE 引用…', 'Checking playlists and M3U/CUE references in this directory…');
     document.getElementById('disc-inspection-coverage').textContent = '';
     document.getElementById('disc-inspection-more').hidden = true;
-    dialog.showModal();
+    showModal(dialog);
     beginWorkbenchOperation('disc-inspection');
     try {
         const data = await desktopRequest('/api/playlist/discs?' + new URLSearchParams({path,system}), undefined, {signal:controller.signal});

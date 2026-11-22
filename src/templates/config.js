@@ -100,7 +100,7 @@ function openFilePicker(inputId, directoryMode, returnFocus = document.activeEle
     document.getElementById('modalTitle').textContent = directoryMode ? workbenchText('选择目录', 'Choose folder') : workbenchText('选择文件', 'Choose file');
     document.getElementById('file-picker-close').setAttribute('aria-label', workbenchText('关闭文件选择器', 'Close file picker'));
     document.getElementById('selectDirBtn').style.display = directoryMode ? 'inline-flex' : 'none';
-    document.getElementById('fileModal').showModal();
+    showModal(document.getElementById('fileModal'));
 
     const currentVal = document.getElementById(inputId).value;
     loadFileList(currentVal || '.');

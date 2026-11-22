@@ -21,7 +21,7 @@ function desktopConfirm(message, confirmLabel = desktopText('确认', 'Confirm')
         desktopButton(actions, desktopText('取消', 'Cancel'), () => finish(false));
         desktopButton(actions, confirmLabel, () => finish(true)).classList.remove('btn-muted');
         dialog.addEventListener('cancel', event => { event.preventDefault(); finish(false); });
-        document.body.appendChild(dialog); dialog.showModal();
+        document.body.appendChild(dialog); showModal(dialog);
     });
 }
 
@@ -124,7 +124,7 @@ async function openDesktop(view = 'preferences', focusArtworkPath = false) {
     closeButton.setAttribute('aria-label', closeLabel);
     closeButton.replaceChildren(wbIcon(view === 'library' ? 'circle-check' : 'x'));
     document.querySelector('#desktop-dialog .desktop-footer').hidden = view !== 'preferences';
-    if (!desktopDialog.open) desktopDialog.showModal();
+    if (!desktopDialog.open) showModal(desktopDialog);
     clearTimeout(desktopPoll);
     await refreshDesktop();
 }

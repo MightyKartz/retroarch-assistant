@@ -10,7 +10,7 @@ function openRomRelocation(source){
     romRelocation.source=source;romRelocation.changed=false;invalidateRelocation();
     relocateField('origin').textContent='源游戏库：'+source.playlist+'；保持原文件名，不覆盖冲突，不清理原目录。';
     relocateField('mode').value='copy';relocateField('version').value='';relocateField('tested').checked=false;relocateField('scope').checked=false;relocateField('settings').open=true;
-    relocateField('status').textContent='默认仅复制。请先预览目标、引用范围和空间，再确认执行。';relocateField('dialog').showModal();
+    relocateField('status').textContent='默认仅复制。请先预览目标、引用范围和空间，再确认执行。';showModal(relocateField('dialog'));
 }
 async function closeRomRelocation(){
     if(romRelocation.busy)return;invalidateRelocation();relocateField('dialog').close();

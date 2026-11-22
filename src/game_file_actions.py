@@ -402,13 +402,16 @@ def _stamp_verifiable(stamp):
         return False
 
 
-def preview_import(sources, directory, remote):
+def preview_import(sources, directory, remote, light=False):
     """Server-side conflict preview for local sources copied into `directory`.
 
     Reports both sides' name/type/size/mtime (None where unavailable) plus a
     target `stamp` the caller returns when approving a replace, and groups of
-    sources that map to the same destination name."""
+    sources that map to the same destination name. `light` skips fingerprinting
+    entirely — the simple overwrite prompt never sends stamps back."""
     def stamp_of(target):
+        if light:
+            return None
         try:
             return target_stamp(target, remote)
         except Exception:
@@ -724,7 +727,9 @@ def _upload_local(source, destination, cancelled):
 
 
 def _remove_destination(target, remote):
-    """Best-effort cleanup of a partially copied destination."""
+    """Best-effort cleanup of a partially copied destination or the original
+    a replace is about to supersede — callers re-check the outcome rather
+    than trusting this to have removed anything."""
     try:
         if remote:
             files, folders = _walk_remote(target)
@@ -777,13 +782,6 @@ def _write_item(item, target, remote, cancelled, on_file):
         on_file()
 
 
-class PublishFailed(RuntimeError):
-    """Publishing the staged copy failed AND restoring the original failed too.
-
-    `recoverable` lists the real locations that still hold content — the parked
-    original and the staged new copy, both left in place for manual salvage."""
-
-
 def _rename_into(target, staged, remote):
     if remote:
         mtp.rename_object(staged, mtp.parse(target)[2][-1])
@@ -819,52 +817,44 @@ def _publish_new(staged, target, remote):
 
 
 def _publish_replace(target, staged, remote):
-    """Publish a staged sibling over an existing target.
+    """Publish a staged sibling over an existing target, discarding the original.
 
-    The original is first moved aside (same directory), then the staged copy
-    claims the freed name without ever replacing an object that appeared
-    during the swap — a foreign claimant keeps the name and the original is
-    restored, also without clobbering. The parked original is NEVER deleted:
-    a handle opened before the move stays writable, so any verify-then-delete
-    pair leaves a window in which updated bytes would be lost. Since neither
-    local storage nor MTP can exclude external writes during cleanup, the
-    parked object is kept and its real path returned for the report; when
-    restoring is impossible the error names the actual locations of both the
-    original and the staged copy."""
-    parked = target + '.plcn-old-' + uuid.uuid4().hex
-    leaf = mtp.parse(target)[2][-1] if remote else Path(target).name
-    parked_leaf = mtp.parse(parked)[2][-1] if remote else Path(parked).name
+    Finder-style replace keeps no backup: the original is deleted first, then
+    the staged copy claims the freed name without ever renaming over a foreign
+    object that slipped into the gap — such a claimant keeps the name. When
+    publishing fails after the original is already gone, the staged copy is
+    left in place and reported via `error.leftover` rather than destroyed."""
+    def leftovers_of(error):
+        # A claim-write failure inside _rename_exclusive may already point at
+        # the claimed target path — on the error itself or on its cause — so
+        # merge every recorded leftover before adding the staged copy.
+        merged = []
+        for source in (getattr(getattr(error, '__cause__', None), 'leftover', None),
+                       getattr(error, 'leftover', None)):
+            if isinstance(source, str):
+                merged.append(source)
+            elif source:
+                merged.extend(source)
+        return merged + [staged]
+
     if remote:
-        mtp.rename_object(target, parked_leaf)
-    else:
-        Path(target).rename(parked)
-
-    def restore():
-        if remote:
-            if mtp.stat_file(target) is None:
-                mtp.rename_object(parked, leaf)
-                return
-            raise FileExistsError(errno.EEXIST, '目标已存在', target)
-        _rename_exclusive(parked, target)
-
-    try:
-        if remote:
+        _remove_destination(target, remote)
+        try:
             # MTP has no atomic swap — a foreign object that claimed the freed
             # name must not be renamed over.
             if mtp.stat_file(target) is not None:
                 raise FileExistsError(errno.EEXIST, '目标已存在', target)
             _rename_into(target, staged, remote)
-        else:
-            _rename_exclusive(staged, target)
+        except Exception as error:
+            error.leftover = leftovers_of(error)
+            raise
+        return
+    _remove_destination(target, remote)
+    try:
+        _rename_exclusive(staged, target)
     except Exception as error:
-        try:
-            restore()
-        except Exception:
-            failure = PublishFailed('发布失败且无法还原原件：原内容保留在「' + parked + '」，新内容在「' + staged + '」')
-            failure.recoverable = [parked, staged]
-            raise failure from error
+        error.leftover = leftovers_of(error)
         raise
-    return parked
 
 
 def apply_add(sources, directory, remote, overwrite=False, progress=lambda *args: None,
@@ -947,11 +937,8 @@ def apply_add(sources, directory, remote, overwrite=False, progress=lambda *args
                     _remove_destination(staged, remote)
                     result['kept'].append({'name': name, 'reason': verdict})
                     continue
-                leftover = _publish_replace(target, staged, remote)
+                _publish_replace(target, staged, remote)
                 result['replaced'].append(name)
-                if leftover:
-                    result['leftovers'].append({'name': name, 'path': leftover,
-                                                'reason': '原件已保留，核对后可手动删除'})
             elif _publish_new(staged, target, remote):
                 result['copied'].append(name)
             else:
@@ -965,15 +952,19 @@ def apply_add(sources, directory, remote, overwrite=False, progress=lambda *args
             result['failed'].append({'name': name, 'error': str(error)})
             result['remaining'] = [pending['name'] for pending in items[index + 1:]]
             return result
-        except PublishFailed as error:
-            # Both the parked original and the staged copy are left in place;
-            # report their real paths instead of deleting evidence.
-            entry = {'name': name, 'error': str(error), 'recoverable': list(error.recoverable)}
-            result['failed'].append(entry)
-            result['remaining'] = [pending['name'] for pending in items[index + 1:]]
-            return result
         except (PublishConflict, PublishAbort) as error:
-            _remove_destination(staged, remote)
+            # When the staged copy is the survivor being reported (publish
+            # failed after the original was deleted), it stays in place.
+            leftovers = []
+            for source in (getattr(error.__cause__, 'leftover', None),
+                           getattr(error, 'leftover', None)):
+                if isinstance(source, str):
+                    leftovers.append(source)
+                elif source:
+                    leftovers.extend(source)
+            leftovers = list(dict.fromkeys(leftovers))
+            if staged not in leftovers:
+                _remove_destination(staged, remote)
             entry = {'name': name, 'target': target,
                      'error': str(error) + ('：' + str(error.__cause__)
                                             if error.__cause__ is not None
@@ -983,20 +974,28 @@ def apply_add(sources, directory, remote, overwrite=False, progress=lambda *args
                 entry['conflict'] = str(error.member)
             else:
                 entry['interrupted'] = str(error.member)
-            leftover = (getattr(error.__cause__, 'leftover', None)
-                        or getattr(error, 'leftover', None))
-            if leftover:
-                result['leftovers'].append({'name': name, 'path': leftover,
+            for path in leftovers:
+                result['leftovers'].append({'name': name, 'path': path,
                                             'reason': '写入中断，路径待核对'})
             result['failed'].append(entry)
             result['remaining'] = [pending['name'] for pending in items[index + 1:]]
             return result
         except Exception as error:
-            _remove_destination(staged, remote)
+            # Same survivor rule: a staged copy reported via `error.leftover`
+            # is evidence, not residue to clean up.
+            leftovers = []
+            for source in (getattr(error.__cause__, 'leftover', None),
+                           getattr(error, 'leftover', None)):
+                if isinstance(source, str):
+                    leftovers.append(source)
+                elif source:
+                    leftovers.extend(source)
+            leftovers = list(dict.fromkeys(leftovers))
+            if staged not in leftovers:
+                _remove_destination(staged, remote)
             result['failed'].append({'name': name, 'error': str(error), 'target': target})
-            leftover = getattr(error, 'leftover', None)
-            if leftover:
-                result['leftovers'].append({'name': name, 'path': leftover,
+            for path in leftovers:
+                result['leftovers'].append({'name': name, 'path': path,
                                             'reason': '写入中断，路径待核对'})
             result['remaining'] = [pending['name'] for pending in items[index + 1:]]
             return result

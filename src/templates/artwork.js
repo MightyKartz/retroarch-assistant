@@ -147,7 +147,7 @@ function openArtworkDialog(item, autoSearch = true) {
         pane.append(artworkElement('dialog'));
         artworkElement('dialog').show();
         pane.scrollTop = 0;
-    } else artworkElement('dialog').showModal();
+    } else showModal(artworkElement('dialog'));
     artworkElement('source').focus();
     artworkElement('identity').textContent = '';
     artworkElement('names').replaceChildren();
